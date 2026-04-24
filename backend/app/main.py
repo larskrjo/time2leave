@@ -1,7 +1,8 @@
 """
 FastAPI application entrypoint.
 
-Serves the commute heatmap API and schedules the weekly data-gathering job.
+Serves the multi-user trips + heatmap API and schedules the weekly
+data-gathering job.
 """
 
 import logging
@@ -17,10 +18,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.api.admin_api import admin_router
+from app.api.auth_api import auth_router
 from app.api.healthcheck_api import healthcheck_router
-from app.api.traffic_api import traffic_router
+from app.api.trips_api import trips_router
 from app.config import get_settings
 from app.job.data_gathering import main as data_gathering_main
+from app.services.allowlist import bootstrap_from_settings
 
 logging.basicConfig(
     level=logging.INFO,
@@ -28,7 +31,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Suppress pandas warning about mysql-connector compatibility.
 warnings.filterwarnings(
     "ignore",
     message=".*SQLAlchemy connectable.*",
@@ -42,26 +44,31 @@ scheduler = AsyncIOScheduler(timezone=pacific_tz)
 
 def run_data_gathering() -> None:
     """Wrapper invoked by the scheduler; logs duration + errors."""
-    logger.info("🔄 Starting data gathering job...")
+    logger.info("Starting data gathering job...")
     start_time = datetime.now(UTC)
     try:
         data_gathering_main()
         duration = (datetime.now(UTC) - start_time).total_seconds()
         logger.info(
-            f"✅ Data gathering job completed successfully in {duration:.2f} seconds"
+            "Data gathering job completed successfully in %.2f seconds",
+            duration,
         )
-    except Exception as e:
+    except Exception:
         duration = (datetime.now(UTC) - start_time).total_seconds()
-        logger.error(
-            f"❌ Error running data gathering job after {duration:.2f} seconds: {e}",
-            exc_info=True,
+        logger.exception(
+            "Error running data gathering job after %.2f seconds", duration
         )
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Manage scheduler lifecycle."""
+    """Manage scheduler lifecycle + bootstrap allowlist."""
     settings = get_settings()
+
+    try:
+        bootstrap_from_settings(settings)
+    except Exception:
+        logger.exception("Allowlist bootstrap raised at startup; continuing")
 
     if settings.app_env == "prod":
         job = scheduler.add_job(
@@ -75,7 +82,7 @@ async def lifespan(app: FastAPI):
         scheduler.start()
         next_run = job.next_run_time
         logger.info(
-            "✅ Scheduler started (prod): Fridays 23:00 PT (next run: %s)",
+            "Scheduler started (prod): Fridays 23:00 PT (next run: %s)",
             next_run.isoformat() if next_run else "N/A",
         )
     else:
@@ -90,17 +97,20 @@ async def lifespan(app: FastAPI):
     finally:
         if scheduler.running:
             scheduler.shutdown()
-            logger.info("✅ Scheduler stopped")
+            logger.info("Scheduler stopped")
 
 
 def create_app() -> FastAPI:
     """Application factory. Exposed for tests and WSGI servers."""
     settings = get_settings()
-    app = FastAPI(title="Traffic Commute API", version="1.0.0", lifespan=lifespan)
+    app = FastAPI(
+        title="Traffic Commute API", version="2.0.0", lifespan=lifespan
+    )
 
     app.include_router(healthcheck_router)
-    app.include_router(traffic_router)
-    if settings.enable_admin_api and settings.app_env != "prod":
+    app.include_router(auth_router)
+    app.include_router(trips_router)
+    if settings.enable_admin_api:
         app.include_router(admin_router)
 
     origins = (
@@ -120,8 +130,6 @@ def create_app() -> FastAPI:
     async def _unhandled_exception_handler(
         request: Request, exc: Exception
     ) -> JSONResponse:
-        # Keeps 500s flowing through the CORS middleware so the browser sees a
-        # real 500 with JSON body instead of reporting a misleading CORS error.
         logger.exception("Unhandled exception on %s %s", request.method, request.url)
         return JSONResponse(
             status_code=500,
