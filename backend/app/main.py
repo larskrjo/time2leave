@@ -12,8 +12,9 @@ from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from app.api.admin_api import admin_router
 from app.api.healthcheck_api import healthcheck_router
@@ -114,6 +115,18 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    @app.exception_handler(Exception)
+    async def _unhandled_exception_handler(
+        request: Request, exc: Exception
+    ) -> JSONResponse:
+        # Keeps 500s flowing through the CORS middleware so the browser sees a
+        # real 500 with JSON body instead of reporting a misleading CORS error.
+        logger.exception("Unhandled exception on %s %s", request.method, request.url)
+        return JSONResponse(
+            status_code=500,
+            content={"detail": "Internal server error", "error": str(exc)},
+        )
 
     return app
 

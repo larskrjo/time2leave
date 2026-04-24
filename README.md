@@ -109,11 +109,24 @@ npm run build       # production bundle in build/client/
 
 ## Deployment (unchanged from before)
 
+The frontend and backend deploy independently, from **different machines**:
+
+| Component | Runs on | Deployed from | Command |
+| --- | --- | --- | --- |
+| Backend (FastAPI in Docker) | EC2 | the EC2 host (SSH in first) | `cd backend && ./scripts/build-and-deploy.sh` |
+| Frontend (static SPA) | S3 + CloudFront | **your local machine** | `make deploy-frontend` (from repo root) |
+
+Do not try to build the frontend on EC2 — that host has no Node toolchain and
+no AWS credentials for the S3/CloudFront resources. `deploy-to-s3.sh` now
+fails fast with a clear message if `npm` or `aws` is missing.
+
 ### Backend — Docker on EC2
 
 ```bash
 # On the EC2 host:
-cd /home/ec2-user/traffic-larsjohansen-com/backend
+cd /home/ec2-user/traffic-larsjohansen-com
+git pull
+cd backend
 ./scripts/build-and-deploy.sh
 ```
 
@@ -123,14 +136,27 @@ so it can reach the sibling `mysql` container. AWS Secrets Manager secret
 `MySecret` (in `us-west-2`) supplies MySQL credentials and the Google
 Maps API key.
 
-### Frontend — S3 + CloudFront
+Smoke tests after deploy:
 
 ```bash
+curl https://api.traffic.larsjohansen.com/healthcheck
+curl https://api.traffic.larsjohansen.com/healthcheck/scheduler
+```
+
+### Frontend — S3 + CloudFront
+
+From your **local machine** (requires Node 20+ and AWS CLI with creds for
+bucket `traffic-larsjohansen-frontend` / distribution `E1XJU7E7JJA9QX`):
+
+```bash
+cd ~/code/traffic-larsjohansen-com
+git pull
 make deploy-frontend
 ```
 
-Builds the SPA, syncs `build/client/` to `s3://traffic-larsjohansen-frontend`,
-and invalidates CloudFront distribution `E1XJU7E7JJA9QX`.
+Builds the SPA, syncs `build/client/` to `s3://traffic-larsjohansen-frontend`
+(immutable cache for assets, `no-cache` for `index.html`), and invalidates
+CloudFront. The script waits until the invalidation completes.
 
 ### CI
 

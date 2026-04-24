@@ -8,6 +8,11 @@ services:
       APP_ENV: "prod"
       AWS_PROFILE: "default"
       AWS_SDK_LOAD_CONFIG: "1"
+      # MySQL lives in a sibling container named "mysql" on shared_network.
+      # Credentials still come from AWS Secrets Manager (see app/config.py).
+      MYSQL_HOST: "mysql"
+      MYSQL_PORT: "3306"
+      MYSQL_DATABASE: "traffic_larsjohansen_com"
     healthcheck:
       test: ["CMD-SHELL", "python healthcheck.py"]
       interval: 5s
