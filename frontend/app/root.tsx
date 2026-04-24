@@ -41,20 +41,23 @@ export function HydrateFallback() {
 
 export function Layout({ children }: { children: React.ReactNode }) {
   return (
-  <html lang="en" data-mui-color-scheme="light">
+    // suppressHydrationWarning on <html> covers the data-mui-color-scheme
+    // flip done by <InitColorSchemeScript />. On <body> it covers attributes
+    // injected by browser extensions (ColorZilla's `cz-shortcut-listen`,
+    // Grammarly's `data-gr-*`, etc.) — these happen outside React's control
+    // and would otherwise fail the React 19 hydration check.
+    <html lang="en" suppressHydrationWarning>
       <head>
         <meta charSet="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <Meta />
         <Links />
-      </head>
-      <body suppressHydrationWarning>
         <InitColorSchemeScript
-          attribute="[data-mui-color-scheme='%s']"
+          attribute="data-mui-color-scheme"
           defaultMode="light"
         />
-
-        {/* 2) Match defaultMode with the script */}
+      </head>
+      <body suppressHydrationWarning>
         <ThemeProvider theme={theme}>
           <CssBaseline />
           {children}
