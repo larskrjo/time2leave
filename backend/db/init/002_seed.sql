@@ -3,14 +3,14 @@
 USE traffic_larsjohansen_com;
 
 -- Local dev user and allowlist entry.
-INSERT IGNORE INTO auth_allowlist (email, added_by) VALUES ('dev@local.test', 'seed');
+INSERT IGNORE INTO auth_allowlist (email, added_by) VALUES ('dev@example.com', 'seed');
 INSERT IGNORE INTO users (google_sub, email, name) VALUES (
-    'dev-local-000', 'dev@local.test', 'Local Dev'
+    'dev-local-000', 'dev@example.com', 'Local Dev'
 );
 
 -- Dev user's Home -> Work trip.
 INSERT IGNORE INTO trips (user_id, name, origin_address, destination_address) VALUES (
-    (SELECT id FROM users WHERE email = 'dev@local.test'),
+    (SELECT id FROM users WHERE email = 'dev@example.com'),
     'Home to Work', '4585 Thousand Oaks Dr, San Jose, CA 95136', '650 California St, San Francisco, CA 94108'
 );
 

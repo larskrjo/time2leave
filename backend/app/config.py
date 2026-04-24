@@ -12,10 +12,10 @@ import json
 import logging
 import os
 from functools import lru_cache
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import Field, field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 logger = logging.getLogger(__name__)
 
@@ -51,9 +51,12 @@ class Settings(BaseSettings):
     session_ttl_hours: int = 24 * 7
     session_cookie_domain: str | None = None
 
-    # Access control.
-    admin_emails: list[str] = Field(default_factory=list)
-    auth_allowlist_bootstrap: list[str] = Field(default_factory=list)
+    # Access control. `NoDecode` tells pydantic-settings not to try
+    # JSON-parsing the raw env var; `_split_comma_separated` handles it.
+    admin_emails: Annotated[list[str], NoDecode] = Field(default_factory=list)
+    auth_allowlist_bootstrap: Annotated[list[str], NoDecode] = Field(
+        default_factory=list
+    )
 
     # Per-user and global trip quotas.
     max_trips_per_user: int = 3
@@ -71,7 +74,7 @@ class Settings(BaseSettings):
 
     # CORS origins allowed outside of prod. In prod we always allow exactly
     # https://traffic.larsjohansen.com.
-    allowed_origins: list[str] = Field(
+    allowed_origins: Annotated[list[str], NoDecode] = Field(
         default_factory=lambda: [
             "http://localhost:5173",
             "http://127.0.0.1:5173",
@@ -100,13 +103,25 @@ class Settings(BaseSettings):
         mode="before",
     )
     @classmethod
-    def _split_comma_separated(cls, v: object) -> object:
-        """Allow ADMIN_EMAILS=foo@a,bar@b to parse into a list."""
+    def _split_email_lists(cls, v: object) -> object:
+        """Allow ADMIN_EMAILS=foo@a,bar@b to parse into a lowercased list."""
         if isinstance(v, str):
-            parts = [p.strip().lower() for p in v.split(",") if p.strip()]
-            return parts
+            return [p.strip().lower() for p in v.split(",") if p.strip()]
         if isinstance(v, list):
             return [str(x).strip().lower() for x in v]
+        return v
+
+    @field_validator("allowed_origins", mode="before")
+    @classmethod
+    def _split_origins(cls, v: object) -> object:
+        """Allow ALLOWED_ORIGINS=http://a,http://b to parse into a list.
+
+        Origins keep their original casing (URLs are case-sensitive in path).
+        """
+        if isinstance(v, str):
+            return [p.strip() for p in v.split(",") if p.strip()]
+        if isinstance(v, list):
+            return [str(x).strip() for x in v]
         return v
 
 

@@ -24,7 +24,7 @@ OUT_PATH = Path(__file__).parent / "002_seed.sql"
 
 TZ_OFFSET = timezone(timedelta(hours=-8))
 
-DEV_EMAIL = "dev@local.test"
+DEV_EMAIL = "dev@example.com"
 DEV_GOOGLE_SUB = "dev-local-000"
 DEV_NAME = "Local Dev"
 
