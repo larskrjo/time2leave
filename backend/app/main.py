@@ -113,14 +113,19 @@ def create_app() -> FastAPI:
     if settings.enable_admin_api:
         app.include_router(admin_router)
 
-    origins = (
-        ["https://traffic.larsjohansen.com"]
-        if settings.app_env == "prod"
-        else settings.allowed_origins
-    )
+    if settings.app_env == "prod":
+        origins: list[str] = ["https://traffic.larsjohansen.com"]
+        origin_regex: str | None = None
+    else:
+        origins = settings.allowed_origins
+        # Vite auto-bumps to :5174, :5175, … when a port is already in use
+        # on dev machines. Allow any localhost/127.0.0.1 port in non-prod
+        # so the dev server Just Works regardless of which port it grabs.
+        origin_regex = r"^http://(localhost|127\.0\.0\.1)(:\d+)?$"
     app.add_middleware(
         CORSMiddleware,
         allow_origins=origins,
+        allow_origin_regex=origin_regex,
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
