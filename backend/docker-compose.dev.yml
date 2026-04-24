@@ -1,0 +1,90 @@
+# Local development stack: mysql + backend API.
+# Frontend is optional (see frontend service at the bottom) — most people
+# run the Vite dev server on the host for fast HMR.
+#
+# Usage:
+#   docker compose -f backend/docker-compose.dev.yml up -d
+#   docker compose -f backend/docker-compose.dev.yml --profile full up -d   # include frontend
+#   docker compose -f backend/docker-compose.dev.yml down -v                # wipe data
+#
+# Host port overrides (useful if 3306 / 8000 / 5173 are taken on your box):
+#   MYSQL_HOST_PORT=3307 API_HOST_PORT=8000 FRONTEND_HOST_PORT=5173 \
+#     docker compose -f backend/docker-compose.dev.yml up -d
+
+services:
+  mysql:
+    image: mysql:8
+    container_name: traffic-mysql-dev
+    restart: unless-stopped
+    ports:
+      - "${MYSQL_HOST_PORT:-3307}:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: Abcd1234
+      MYSQL_DATABASE: traffic_larsjohansen_com
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./db/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test:
+        ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-pAbcd1234"]
+      interval: 5s
+      timeout: 3s
+      start_period: 10s
+      retries: 20
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: api-traffic:dev
+    container_name: traffic-api-dev
+    depends_on:
+      mysql:
+        condition: service_healthy
+    ports:
+      - "${API_HOST_PORT:-8000}:8000"
+    environment:
+      APP_ENV: local
+      MYSQL_HOST: mysql
+      MYSQL_PORT: "3306"
+      MYSQL_USER: root
+      MYSQL_PASSWORD: Abcd1234
+      MYSQL_DATABASE: traffic_larsjohansen_com
+      DATA_PROVIDER: fixture
+    volumes:
+      - ./app:/app/app
+      - ./db:/app/db:ro
+    command:
+      [
+        "uvicorn",
+        "app.main:app",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8000",
+        "--reload",
+      ]
+    healthcheck:
+      test: ["CMD-SHELL", "python healthcheck.py"]
+      interval: 5s
+      timeout: 3s
+      start_period: 5s
+      retries: 20
+
+  frontend:
+    profiles: ["full"]
+    image: node:20-alpine
+    container_name: traffic-frontend-dev
+    working_dir: /app
+    ports:
+      - "${FRONTEND_HOST_PORT:-5173}:5173"
+    environment:
+      VITE_API_BASE_URL: http://localhost:8000
+    volumes:
+      - ../frontend:/app
+      - frontend_node_modules:/app/node_modules
+    command: sh -c "npm install && npm run dev -- --host 0.0.0.0"
+
+volumes:
+  mysql_data:
+  frontend_node_modules:

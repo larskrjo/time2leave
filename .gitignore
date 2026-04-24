@@ -4,6 +4,9 @@
 # JetBrains
 **/.idea/
 
+# VS Code (keep shared config if any is checked in)
+# **/.vscode/
+
 # Javascript/Typescript
 **/node_modules/
 
@@ -11,7 +14,17 @@
 **/__pycache__/
 **/*.egg-info/
 **/.venv
+**/.mypy_cache/
+**/.ruff_cache/
+**/.pytest_cache/
+**/htmlcov/
+**/.coverage
 
 # React Router
 **/.react-router/
 **/build/
+
+# Local env files (keep .env.example checked in)
+**/.env
+**/.env.local
+**/.env.*.local

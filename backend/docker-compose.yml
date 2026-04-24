@@ -5,7 +5,7 @@ services:
     ports: ["8485:8000"]
     restart: unless-stopped
     environment:
-      DEVELOPMENT_MODE: "prod"
+      APP_ENV: "prod"
       AWS_PROFILE: "default"
       AWS_SDK_LOAD_CONFIG: "1"
     healthcheck:

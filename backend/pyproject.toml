@@ -16,27 +16,76 @@ dependencies = [
     "pandas-stubs",
     "numpy",
     "matplotlib",
-    "apscheduler"
+    "apscheduler",
+    "pydantic-settings>=2.0",
 ]
 
-[tool.black]
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+exclude = ["tests*", "db*", "scripts*", "build*", ".venv*"]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+    "pytest-asyncio>=0.23",
+    "httpx>=0.27",
+    "responses>=0.25",
+    "testcontainers[mysql]>=4.8",
+    "ruff>=0.6",
+    "mypy>=1.11",
+]
+
+[tool.ruff]
 line-length = 88
-target-version = ['py312']
-include = '\.pyi?$'
-exclude = '''
-/(
-    \.git
-  | \.hg
-  | \.mypy_cache
-  | \.tox
-  | \.venv
-  | _build
-  | buck-out
-  | build
-  | dist
-)/
-'''
+target-version = "py312"
+extend-exclude = [".venv", "build", "dist", ".mypy_cache"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B"]
+ignore = [
+    "E203",  # whitespace before ':' (black/ruff disagreement)
+    "E501",  # line length (we wrap where it helps readability)
+    "F722",  # forward-annotation syntax (clashes with FastAPI decorators)
+    "F541",  # f-string without placeholders
+    "B008",  # function calls in default args (FastAPI Depends idiom)
+]
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401"]
+"tests/**" = ["E402"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
 
 [tool.pyright]
 typeCheckingMode = "basic"
 reportMissingTypeStubs = false
+
+[tool.mypy]
+python_version = "3.12"
+ignore_missing_imports = true
+check_untyped_defs = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+warn_return_any = true
+no_implicit_optional = true
+strict_equality = true
+exclude = "build|dist|\\.venv"
+
+[[tool.mypy.overrides]]
+module = ["tests.*"]
+check_untyped_defs = false
+warn_return_any = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "integration: integration tests requiring docker/testcontainers (slow)",
+]
+addopts = "-ra -q -m 'not integration'"
+asyncio_mode = "auto"

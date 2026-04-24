@@ -1,21 +1,34 @@
-import json
+"""
+Backward-compatibility shim.
 
-import boto3  # type: ignore[import-untyped]
-from botocore.exceptions import ClientError  # type: ignore[import-untyped]
+All secret/config access now flows through `app.config.get_settings()`. This
+module is kept only so that older imports continue to work during the
+transition; prefer `from app.config import get_settings` in new code.
+"""
 
+from __future__ import annotations
 
-def _get_secrets_from_aws():
-    secret_name = "MySecret"
-    region_name = "us-west-2"
-
-    # Create a Secrets Manager client
-    session = boto3.session.Session()  # type: ignore[attr-defined]
-    client = session.client(service_name="secretsmanager", region_name=region_name)
-
-    try:
-        return json.loads(client.get_secret_value(SecretId=secret_name)["SecretString"])
-    except ClientError as e:
-        raise e
+from app.config import get_settings
 
 
-SECRETS = _get_secrets_from_aws()
+def _get_secrets_from_aws() -> dict[str, str]:
+    """Deprecated: use app.config.get_settings() instead."""
+    settings = get_settings()
+    return {
+        "mysql_user": settings.mysql_user,
+        "mysql_password": settings.mysql_password,
+        "google_maps_api_key": settings.google_maps_api_key or "",
+    }
+
+
+class _LazySecrets:
+    """Dict-like proxy over Settings for legacy `SECRETS["..."]` access."""
+
+    def __getitem__(self, key: str) -> str:
+        return _get_secrets_from_aws()[key]
+
+    def get(self, key: str, default: str | None = None) -> str | None:
+        return _get_secrets_from_aws().get(key, default)
+
+
+SECRETS: _LazySecrets = _LazySecrets()

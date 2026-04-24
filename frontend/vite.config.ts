@@ -7,6 +7,10 @@ export default defineConfig({
     plugins: [reactRouter(), tsconfigPaths()],
     server: {
         host: true,
-        allowedHosts: ['traffic.larsjohansen.com'],
-    }
+        allowedHosts: [
+            "localhost",
+            "127.0.0.1",
+            "traffic.larsjohansen.com",
+        ],
+    },
 });

@@ -1,15 +1,24 @@
-from fastapi import APIRouter
+"""
+Public commute heatmap endpoints.
 
-from typing import Dict, Optional
+The router exposes aggregated commute durations for the frontend heatmap.
+The MySQL pool is accessed through a FastAPI dependency so tests can
+override it without monkey-patching imports.
+"""
+
+from __future__ import annotations
+
 import warnings
+from typing import Any
+
 import numpy as np
-import pandas as pd  # type: ignore[import]
-from fastapi import HTTPException
-from mysql.connector import Error  # type: ignore[import-untyped]
+import pandas as pd
+from fastapi import APIRouter, Depends, HTTPException
+from mysql.connector import Error
 
-from app.db.db import pool  # type: ignore[import-untyped]
+from app.db.db import get_pool
 
-# Suppress pandas warning about mysql-connector compatibility
+# Suppress pandas warning about mysql-connector compatibility.
 warnings.filterwarnings(
     "ignore",
     message=".*SQLAlchemy connectable.*",
@@ -20,8 +29,16 @@ warnings.filterwarnings(
 traffic_router = APIRouter(prefix="/api/v1", tags=["Traffic Commute API"])
 
 
-def parse_duration_minutes(val) -> float:
-    """Convert "3720s" → 62.0"""
+def get_connection_pool() -> Any:
+    """FastAPI dependency that returns the shared MySQL connection pool."""
+    return get_pool()
+
+
+def parse_duration_minutes(val: Any) -> float:
+    """Convert a Google-style duration string like '3720s' into minutes.
+
+    Returns NaN for anything that cannot be parsed.
+    """
     if isinstance(val, str) and val.endswith("s"):
         try:
             return int(val[:-1]) / 60.0
@@ -30,8 +47,8 @@ def parse_duration_minutes(val) -> float:
     return np.nan
 
 
-def get_commute_data_from_db() -> pd.DataFrame:
-    """Fetch commute data from MySQL database and return as DataFrame."""
+def get_commute_data_from_db(pool: Any) -> pd.DataFrame:
+    """Fetch commute rows from MySQL as a DataFrame."""
     connection = pool.get_connection()
     try:
         query = """
@@ -50,76 +67,71 @@ def get_commute_data_from_db() -> pd.DataFrame:
           AND duration != ''
         ORDER BY departure_time_rfc3339
         """
-        df = pd.read_sql(query, connection)  # type: ignore[attr-defined]
+        df = pd.read_sql(query, connection)
         return df
     except Error as e:
-        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Database error: {str(e)}"
+        ) from e
     finally:
         if connection.is_connected():
             connection.close()
 
 
-def process_commute_data(df: pd.DataFrame) -> Dict[str, Dict]:
-    """Process DataFrame into the same format used for plotting."""
+def process_commute_data(df: pd.DataFrame) -> dict[str, dict]:
+    """Pivot the raw commute rows into the nested dict the frontend expects."""
     if df.empty:
         return {}
 
-    # Parse duration to minutes
     df["minutes"] = df["duration"].apply(parse_duration_minutes)
-    df = df[df["minutes"].notna()]  # type: ignore[assignment]
+    df = df[df["minutes"].notna()]
 
-    # Parse timestamps
-    df["ts"] = pd.to_datetime(df["departure_time_rfc3339"], errors="coerce")
-    df = df[df["ts"].notna()]  # type: ignore[assignment]
+    # `departure_time_rfc3339` mixes UTC offsets (`-08:00` for PST rows and
+    # `-07:00` for PDT rows within the same dataset), so we must parse with
+    # `utc=True` to unify them, then convert back to the canonical local zone
+    # so weekday/hour bucketing is on wall-clock time instead of UTC.
+    df["ts"] = pd.to_datetime(
+        df["departure_time_rfc3339"], errors="coerce", utc=True
+    ).dt.tz_convert("America/Los_Angeles")
+    df = df[df["ts"].notna()]
 
-    # Display-friendly direction labels
-    df["direction"] = df["direction"].replace(  # type: ignore[assignment]
+    df["direction"] = df["direction"].replace(
         {"H2W": "Home → Work", "W2H": "Work → Home"}
     )
 
-    # Weekday mapping
     weekday_map = {0: "Mon", 1: "Tue", 2: "Wed", 3: "Thu", 4: "Fri", 5: "Sat", 6: "Sun"}
     df["weekday_num"] = df["ts"].dt.weekday
-    df["weekday"] = df["weekday_num"].map(weekday_map)  # type: ignore[arg-type]
-
-    # Time-of-day label as HH:MM
+    df["weekday"] = df["weekday_num"].map(weekday_map)
     df["time_hm"] = df["ts"].dt.strftime("%H:%M")
 
     weekday_order = ["Mon", "Tue", "Wed", "Thu", "Fri"]
+    result: dict[str, dict] = {}
 
-    result = {}
-
-    for direction_label in sorted(df["direction"].dropna().unique()):  # type: ignore[attr-defined]
+    for direction_label in sorted(df["direction"].dropna().unique()):
         ddir = df[df["direction"] == direction_label].copy()
-
         if ddir.empty:
             continue
 
-        # Get date range
-        monday = ddir["ts"].dt.date.min()  # type: ignore[attr-defined]
-        friday = ddir["ts"].dt.date.max()  # type: ignore[attr-defined]
+        monday = ddir["ts"].dt.date.min()
+        friday = ddir["ts"].dt.date.max()
         date_range = f"{monday:%b. %d} – {friday:%b. %d}"
 
-        # Determine period (Morning or Evening)
-        hours = ddir["ts"].dt.hour  # type: ignore[attr-defined]
+        hours = ddir["ts"].dt.hour
         period_label = "Morning" if hours.max() <= 14 else "Evening"
 
-        # Create pivot table (median minutes by weekday and time)
-        times_sorted = sorted(ddir["time_hm"].unique())  # type: ignore[attr-defined]
+        times_sorted = sorted(ddir["time_hm"].unique())
         pivot = ddir.pivot_table(
             index="weekday", columns="time_hm", values="minutes", aggfunc="median"
         )
         pivot = pivot.reindex(index=weekday_order, columns=times_sorted)
 
-        # Convert pivot table to nested dict format
-        heatmap_data: Dict[str, Dict[str, Optional[float]]] = {}
+        heatmap_data: dict[str, dict[str, float | None]] = {}
         for weekday in weekday_order:
             if weekday in pivot.index:
                 heatmap_data[weekday] = {}
                 for time_hm in times_sorted:
                     if time_hm in pivot.columns:
                         value = pivot.loc[weekday, time_hm]
-                        # Convert NaN to None for JSON serialization
                         heatmap_data[weekday][time_hm] = (
                             float(value) if not pd.isna(value) else None
                         )
@@ -143,22 +155,14 @@ async def root():
 
 @traffic_router.get("/commute/heatmap")
 async def get_commute_heatmap_data(
-    direction: Optional[str] = None,
+    direction: str | None = None,
+    pool: Any = Depends(get_connection_pool),
 ):
-    """
-    Get commute heatmap data in the same format used for plotting.
-
-    Args:
-        direction: Optional filter by direction ("Home → Work" or "Work → Home")
-
-    Returns:
-        Dictionary with heatmap data organized by direction
-    """
+    """Return the commute heatmap payload, optionally filtered by direction."""
     try:
-        df = get_commute_data_from_db()
+        df = get_commute_data_from_db(pool)
         result = process_commute_data(df)
 
-        # Filter by direction if specified
         if direction:
             if direction not in result:
                 raise HTTPException(
@@ -170,15 +174,17 @@ async def get_commute_heatmap_data(
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error processing data: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Error processing data: {str(e)}"
+        ) from e
 
 
 @traffic_router.get("/commute/directions")
-async def get_directions():
-    """Get list of available directions."""
+async def get_directions(pool: Any = Depends(get_connection_pool)):
+    """Return the list of direction labels present in the dataset."""
     try:
-        df = get_commute_data_from_db()
+        df = get_commute_data_from_db(pool)
         result = process_commute_data(df)
         return {"directions": list(result.keys())}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}") from e
