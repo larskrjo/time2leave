@@ -9,4 +9,23 @@ export const BASE_URL =
           ? DEFAULT_DEV_BASE_URL
           : DEFAULT_PROD_BASE_URL;
 
-export const COMMUTE_HEATMAP_URL = `${BASE_URL}/api/v1/commute/heatmap`;
+export const API = {
+    me: `${BASE_URL}/api/v1/me`,
+    authGoogle: `${BASE_URL}/api/v1/auth/google`,
+    authLogout: `${BASE_URL}/api/v1/auth/logout`,
+    authDevLogin: `${BASE_URL}/api/v1/auth/dev-login`,
+    authConfig: `${BASE_URL}/api/v1/auth/config`,
+    trips: `${BASE_URL}/api/v1/trips`,
+    trip: (id: number | string) => `${BASE_URL}/api/v1/trips/${id}`,
+    tripHeatmap: (id: number | string) =>
+        `${BASE_URL}/api/v1/trips/${id}/heatmap`,
+    tripBackfillStatus: (id: number | string) =>
+        `${BASE_URL}/api/v1/trips/${id}/backfill-status`,
+} as const;
+
+export const ROUTES = {
+    splash: "/",
+    trips: "/trips",
+    newTrip: "/trips/new",
+    trip: (id: number | string) => `/trips/${id}`,
+} as const;

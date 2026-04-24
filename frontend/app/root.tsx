@@ -13,6 +13,7 @@ import InitColorSchemeScript from '@mui/material/InitColorSchemeScript';
 
 import {theme} from './styles/theme';
 import Loading from "~/components/Loading";
+import {SessionProvider} from "~/lib/session";
 
 
 export function meta({}: Route.MetaArgs) {
@@ -60,7 +61,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
       <body suppressHydrationWarning>
         <ThemeProvider theme={theme}>
           <CssBaseline />
-          {children}
+          <SessionProvider>{children}</SessionProvider>
         </ThemeProvider>
         <ScrollRestoration />
         <Scripts />
