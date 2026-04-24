@@ -56,13 +56,17 @@ export function TripHeatmap({ heatmap, direction }: Props) {
 
     return (
         <Box sx={{ overflowX: "auto", pb: 1 }}>
-            <Box sx={{ minWidth: slots.length * 16 + 100 }}>
+            <Box sx={{ minWidth: slots.length * 17 + 72 }}>
                 <Stack direction="row" sx={{ pl: "72px", mb: 0.5 }}>
                     {slots.map((slot) => (
                         <Box
                             key={slot}
                             sx={{
+                                // Match the cell row below exactly (16px box +
+                                // 1px right margin) so hour labels stay pinned
+                                // above their own column across the full grid.
                                 width: 16,
+                                mr: "1px",
                                 textAlign: "center",
                                 color: "text.secondary",
                                 fontSize: 10,
