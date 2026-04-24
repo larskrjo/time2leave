@@ -1,5 +1,7 @@
 import { http, HttpResponse } from "msw";
 
+import type { HeatmapPayload } from "~/lib/trips";
+
 /**
  * Default MSW handlers for frontend tests.
  *
@@ -37,7 +39,7 @@ export const sampleTripDetail = {
     backfill: { total: 840, ready: 210, percent_complete: 25.0 },
 };
 
-export const sampleHeatmapResponse = {
+export const sampleHeatmapResponse: HeatmapPayload = {
     outbound: {
         Mon: { "07:00": 42, "08:00": 78, "09:00": 60 },
         Tue: { "07:00": 45, "08:00": 80, "09:00": 62 },
