@@ -116,14 +116,17 @@ def test_plan_and_run_enforces_ceiling(
     )
 
     calls: list[str] = []
-    monkeypatch.setattr(
-        dg, "_upsert_empty_slots", lambda **_kw: calls.append("upsert") or 0
-    )
-    monkeypatch.setattr(
-        dg,
-        "_fill_in_slots_for_trip",
-        lambda **_kw: calls.append("fill") or {"updated": 0, "errors": 0},
-    )
+
+    def fake_upsert(**_kw):
+        calls.append("upsert")
+        return 0
+
+    def fake_fill(**_kw):
+        calls.append("fill")
+        return {"updated": 0, "errors": 0}
+
+    monkeypatch.setattr(dg, "_upsert_empty_slots", fake_upsert)
+    monkeypatch.setattr(dg, "_fill_in_slots_for_trip", fake_fill)
 
     class DummyProvider:
         def fetch(self, *args, **kwargs):  # noqa: ARG002
@@ -160,16 +163,17 @@ def test_plan_and_run_bypasses_ceiling_for_backfill(
 
     upserts: list[int] = []
     fills: list[int] = []
-    monkeypatch.setattr(
-        dg,
-        "_upsert_empty_slots",
-        lambda **kw: upserts.append(kw["trip_id"]) or 0,
-    )
-    monkeypatch.setattr(
-        dg,
-        "_fill_in_slots_for_trip",
-        lambda **kw: fills.append(kw["trip"].id) or {"updated": 0, "errors": 0},
-    )
+
+    def fake_upsert(**kw):
+        upserts.append(kw["trip_id"])
+        return 0
+
+    def fake_fill(**kw):
+        fills.append(kw["trip"].id)
+        return {"updated": 0, "errors": 0}
+
+    monkeypatch.setattr(dg, "_upsert_empty_slots", fake_upsert)
+    monkeypatch.setattr(dg, "_fill_in_slots_for_trip", fake_fill)
 
     class DummyProvider:
         def fetch(self, *args, **kwargs):  # noqa: ARG002

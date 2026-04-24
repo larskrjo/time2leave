@@ -49,13 +49,20 @@ dev-fe:
 dev-full:
 	$(COMPOSE_DEV) --profile full up -d --build
 
-## seed: Populate MySQL with fixture data via the running backend.
+## seed: Refresh next-week samples for every active trip via the running backend.
+##       Requires you've signed in once at http://localhost:5173 as an admin.
 .PHONY: seed
 seed:
-	curl -fsS -X POST http://localhost:8000/api/v1/admin/run-data-gathering
+	@if [ -z "$$ADMIN_SESSION_COOKIE" ]; then \
+		echo "Set ADMIN_SESSION_COOKIE='tlh_session=...' (copy from your browser devtools > Application > Cookies)"; \
+		exit 1; \
+	fi
+	curl -fsS -X POST http://localhost:$${API_HOST_PORT:-8000}/api/v1/admin/run-data-gathering \
+		-H "Cookie: $$ADMIN_SESSION_COOKIE"
 	@echo ""
 
-## seed-cli: Populate MySQL by running the Python seeder directly (backend must be able to reach MySQL).
+## seed-cli: Refresh next-week samples by running the Python data-gathering job directly.
+##           Skips auth entirely; useful in CI / first-boot scenarios.
 .PHONY: seed-cli
 seed-cli:
 	cd backend && . .venv/bin/activate && APP_ENV=local MYSQL_HOST=127.0.0.1 MYSQL_PORT=$${MYSQL_HOST_PORT:-3307} python -m scripts.seed_local

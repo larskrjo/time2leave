@@ -51,6 +51,13 @@ services:
       MYSQL_PASSWORD: Abcd1234
       MYSQL_DATABASE: traffic_larsjohansen_com
       DATA_PROVIDER: fixture
+      # Auth: dev-login is enabled and the seeded dev user is admin +
+      # allowlisted. Override SESSION_SECRET if you want stable cookies
+      # across container restarts.
+      SESSION_SECRET: local-dev-secret-not-for-production
+      ENABLE_DEV_LOGIN: "true"
+      ADMIN_EMAILS: dev@example.com
+      AUTH_ALLOWLIST_BOOTSTRAP: dev@example.com
     volumes:
       - ./app:/app/app
       - ./db:/app/db:ro
