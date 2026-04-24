@@ -1,9 +1,12 @@
-# traffic.larsjohansen.com
+# time2leave
 
-Per-user commute heatmap. Sign in with Google, save up to a few "trips"
-(origin → destination address pairs), and see a 15-minute-resolution
-heatmap of expected drive times for the current week, in both directions,
-06:00 – 21:00, every day Mon-Sun.
+Know exactly when to leave. Sign in with Google, save up to a few
+"trips" (origin → destination address pairs), and see a
+15-minute-resolution heatmap of expected drive times for the current
+week, in both directions, 06:00 – 21:00, every day Mon-Sun.
+
+Lives at https://time2leave.com (and still deploys under the legacy
+`traffic.larsjohansen.com` during migration).
 
 - **Backend** — FastAPI + MySQL + APScheduler. Friday-23:00-PT job samples
   Google's Routes Matrix API for every active trip and stores per-slot
@@ -102,7 +105,7 @@ All values have sensible local defaults (see [`backend/.env.example`](backend/.e
 | Var | Default | Notes |
 | --- | --- | --- |
 | `APP_ENV` | `local` | `local`, `dev`, or `prod`. Legacy `DEVELOPMENT_MODE` is accepted as an alias. |
-| `MYSQL_HOST` / `PORT` / `USER` / `PASSWORD` / `DATABASE` | `localhost` / `3306` / `root` / `Abcd1234` / `traffic_larsjohansen_com` | In prod these are overlaid by AWS Secrets Manager secret `MySecret` in `us-west-2`. |
+| `MYSQL_HOST` / `PORT` / `USER` / `PASSWORD` / `DATABASE` | `localhost` / `3306` / `root` / `Abcd1234` / `time2leave` | In prod these are overlaid by AWS Secrets Manager secret `MySecret` in `us-west-2`. The prod database name is still set explicitly via `MYSQL_DATABASE` in `backend/docker-compose.yml`. |
 | `DATA_PROVIDER` | `fixture` | `google` to hit the Routes Matrix API (requires `GOOGLE_MAPS_API_KEY`). |
 | `GOOGLE_MAPS_API_KEY` | _unset_ | Required for `DATA_PROVIDER=google`. |
 | `GOOGLE_OAUTH_CLIENT_ID` | _unset_ | Required for the real Google sign-in. Local dev uses `ENABLE_DEV_LOGIN` instead. |
@@ -180,8 +183,13 @@ npm run build       # production bundle in build/client/
 
 The Google OAuth client id is fetched from the backend (`GET
 /api/v1/auth/config`) so the SPA does not need its own
-`VITE_GOOGLE_OAUTH_CLIENT_ID`. The only frontend-side env var is
-`VITE_API_BASE_URL` (see [`frontend/.env.example`](frontend/.env.example)).
+`VITE_GOOGLE_OAUTH_CLIENT_ID`. Frontend env vars (see
+[`frontend/.env.example`](frontend/.env.example)):
+
+| Var | Notes |
+| --- | --- |
+| `VITE_API_BASE_URL` | Backend base URL. Defaults to `http://localhost:8000` in dev. |
+| `VITE_GOOGLE_MAPS_API_KEY` | Optional **browser-restricted** Maps JS API key used for Places autocomplete on `/trips/new`. Leave unset to get a plain text input. Must have "Maps JavaScript API" + "Places API" enabled and your dev/prod origins (e.g. `http://localhost:5173/*` and `https://traffic.larsjohansen.com/*`) in the HTTP referrer allowlist — otherwise Google returns `RefererNotAllowedMapError` at runtime and the app silently falls back to plain text entry. |
 
 ## Deployment
 
@@ -211,6 +219,34 @@ Uses [`backend/docker-compose.yml`](backend/docker-compose.yml) to run the
 so it can reach the sibling `mysql` container. AWS Secrets Manager secret
 `MySecret` (in `us-west-2`) supplies MySQL credentials, the Google Maps API
 key, the Google OAuth client id, and `session_secret`.
+
+#### Schema is auto-applied
+
+At app startup, `lifespan()` runs
+[`app/db/schema_bootstrap.py`](backend/app/db/schema_bootstrap.py), which
+opens a connection scoped to `MYSQL_DATABASE` and executes the table
+DDL from `db/init/001_schema.sql`. Every `CREATE TABLE` uses
+`IF NOT EXISTS`, so the effect is:
+
+- Brand-new (but pre-created) DB — current state, since we cut over
+  from `traffic_larsjohansen_com` to `time2leave`: the app creates all
+  tables on first boot.
+- Existing DB: startup is a no-op beyond a handful of cheap checks.
+- Adding a new table to the schema file: the next deploy creates it.
+  (Column changes to existing tables still require a proper migration —
+  `CREATE TABLE IF NOT EXISTS` won't `ALTER` anything.)
+
+**Contract: the database itself must already exist.** `CREATE DATABASE`
+and `USE` lines in the schema file are stripped before execution, so
+the app user in AWS Secrets Manager only needs DDL on tables — not the
+global `CREATE` privilege. Database creation is a one-time operator step:
+
+- In dev, `docker-mysql` creates it from `MYSQL_DATABASE` on first
+  volume init — already wired up in `docker-compose.dev.yml`.
+- In prod, run `CREATE DATABASE time2leave;` once, as root.
+
+The seed file (`002_seed.sql`) is local-dev only and is never applied
+in prod.
 
 Smoke tests after deploy:
 

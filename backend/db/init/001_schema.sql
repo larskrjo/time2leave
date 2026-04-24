@@ -1,13 +1,13 @@
--- Schema for the traffic_larsjohansen_com database.
+-- Schema for the `time2leave` database (previously `traffic_larsjohansen_com`).
 -- Multi-user trips app: users sign in via Google OAuth (gated by an
 -- allowlist) and manage up to N trips. Commute samples are gathered weekly
 -- for every active trip in both directions.
 
-CREATE DATABASE IF NOT EXISTS traffic_larsjohansen_com
+CREATE DATABASE IF NOT EXISTS time2leave
     CHARACTER SET utf8mb4
     COLLATE utf8mb4_0900_ai_ci;
 
-USE traffic_larsjohansen_com;
+USE time2leave;
 
 -- Legacy table from the single-user era. Dropped on purpose so there's a
 -- clean cutover to the multi-user schema. If a volume already carries the

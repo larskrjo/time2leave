@@ -91,7 +91,7 @@ def seeded_app(mysql_container, monkeypatch_module_env) -> Iterator[TestClient]:
     monkeypatch_module_env.setenv("MYSQL_PORT", str(port))
     monkeypatch_module_env.setenv("MYSQL_USER", user)
     monkeypatch_module_env.setenv("MYSQL_PASSWORD", password)
-    monkeypatch_module_env.setenv("MYSQL_DATABASE", "traffic_larsjohansen_com")
+    monkeypatch_module_env.setenv("MYSQL_DATABASE", "time2leave")
     monkeypatch_module_env.setenv("SESSION_SECRET", "integration-secret-32-bytes-long")
     monkeypatch_module_env.setenv("ENABLE_DEV_LOGIN", "true")
     monkeypatch_module_env.setenv("ADMIN_EMAILS", "dev@example.com")

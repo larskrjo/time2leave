@@ -40,6 +40,17 @@ class TripQuotaExceededError(Exception):
     """Raised when creating a trip would breach per-user or global caps."""
 
 
+class _Unset:
+    """Sentinel type for optional-with-None fields in update_trip.
+
+    Lets callers distinguish between "don't change this" (omit) and
+    "set this to None" (pass None).
+    """
+
+
+_UNSET = _Unset()
+
+
 def current_week_start(today: date | None = None) -> date:
     """Return the Monday on/before `today` (Pacific)."""
     today = today or datetime.now(TZ).date()
@@ -137,6 +148,74 @@ def create_trip(
         row = cursor.fetchone()
     assert row is not None
     return _row_to_trip(row)
+
+
+def update_trip(
+    *,
+    trip_id: int,
+    user_id: int,
+    name: str | None | _Unset = _UNSET,
+    origin_address: str | None = None,
+    destination_address: str | None = None,
+) -> tuple[Trip, bool]:
+    """Patch a trip's editable fields.
+
+    `name` uses the sentinel `_UNSET` (via omission) so callers can
+    explicitly clear a name by passing `None` without it being confused
+    with "don't touch the name". Addresses are required to stay
+    non-empty when provided.
+
+    Returns `(updated_trip, addresses_changed)`. The bool lets the API
+    layer decide whether to trigger a fresh backfill.
+    """
+    current = get_trip_for_user(trip_id=trip_id, user_id=user_id)
+
+    new_name = current.name if name is _UNSET else name
+    new_origin = origin_address.strip() if origin_address is not None else current.origin_address
+    new_destination = (
+        destination_address.strip()
+        if destination_address is not None
+        else current.destination_address
+    )
+    if new_origin.lower() == new_destination.lower():
+        raise ValueError("Origin and destination cannot be the same address")
+
+    addresses_changed = (
+        new_origin != current.origin_address
+        or new_destination != current.destination_address
+    )
+
+    with Database() as cursor:
+        cursor.execute(
+            """
+            UPDATE trips
+            SET name = %s,
+                origin_address = %s,
+                destination_address = %s
+            WHERE id = %s AND user_id = %s AND deleted_at IS NULL
+            """,
+            (new_name, new_origin, new_destination, trip_id, user_id),
+        )
+        if int(cursor.rowcount or 0) == 0:
+            raise TripNotFoundError(
+                f"Trip {trip_id} not found for user {user_id}"
+            )
+
+    # If addresses changed, the old commute samples are stale; wipe them
+    # so the backfill can start fresh against the new endpoints.
+    if addresses_changed:
+        _delete_samples_for_trip(trip_id)
+
+    refreshed = get_trip_for_user(trip_id=trip_id, user_id=user_id)
+    return refreshed, addresses_changed
+
+
+def _delete_samples_for_trip(trip_id: int) -> None:
+    with Database() as cursor:
+        cursor.execute(
+            "DELETE FROM commute_samples WHERE trip_id = %s",
+            (trip_id,),
+        )
 
 
 def soft_delete_trip(*, trip_id: int, user_id: int) -> None:

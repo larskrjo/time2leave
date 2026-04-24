@@ -18,16 +18,23 @@ import {
     TextField,
     Typography,
 } from "@mui/material";
-import { ArrowBackRounded, RouteRounded } from "@mui/icons-material";
+import {
+    ArrowBackRounded,
+    FlagOutlined,
+    PlaceOutlined,
+    RouteRounded,
+} from "@mui/icons-material";
 
 import { AppShell } from "~/components/AppShell";
+import { PlacesAutocompleteField } from "~/components/PlacesAutocompleteField";
 import { ProtectedRoute } from "~/components/ProtectedRoute";
+import { FadeIn, PageHero, glassCardSx } from "~/components/motion";
 import { ROUTES } from "~/constants/path";
 import { createTrip } from "~/lib/trips";
 import { isApiError } from "~/lib/api";
 
 export function meta() {
-    return [{ title: "New trip · Commute Heatmap" }];
+    return [{ title: "New trip · time2leave" }];
 }
 
 function NewTripForm() {
@@ -65,91 +72,142 @@ function NewTripForm() {
     };
 
     return (
-        <Stack spacing={3} sx={{ maxWidth: 640 }}>
-            <Button
-                component={RouterLink}
-                to={ROUTES.trips}
-                startIcon={<ArrowBackRounded />}
-                sx={{ alignSelf: "flex-start" }}
-            >
-                Back to trips
-            </Button>
+        <Box sx={{ maxWidth: 720, mx: "auto" }}>
+            <FadeIn>
+                <Button
+                    component={RouterLink}
+                    to={ROUTES.trips}
+                    startIcon={<ArrowBackRounded />}
+                    sx={{ mb: 3, fontWeight: 600 }}
+                    color="inherit"
+                >
+                    Back to trips
+                </Button>
+            </FadeIn>
 
-            <Box>
-                <Typography variant="h4" fontWeight={700} gutterBottom>
-                    Add a trip
-                </Typography>
-                <Typography variant="body2" color="text.secondary">
-                    Paste full addresses so we can route accurately. You can
-                    use cross-streets or landmarks, but "1600 Pennsylvania
-                    Ave NW, Washington DC" works best.
-                </Typography>
-            </Box>
+            <PageHero
+                eyebrow="New trip"
+                headline="Name the drive you repeat"
+                accent="repeat"
+                sub="Paste full addresses so we can route accurately. Cross-streets work, but street-level addresses give the crispest heatmap."
+            />
 
-            <Paper
-                variant="outlined"
-                sx={{ p: { xs: 3, md: 4 }, borderRadius: 3 }}
-            >
-                <Box component="form" onSubmit={onSubmit}>
-                    <Stack spacing={2.5}>
-                        <TextField
-                            label="Trip name (optional)"
-                            placeholder="e.g. Home → Work"
-                            value={name}
-                            onChange={(e) => setName(e.target.value)}
-                            fullWidth
-                            inputProps={{ maxLength: 255 }}
-                        />
-                        <TextField
-                            label="Origin address"
-                            placeholder="Starting address"
-                            value={origin}
-                            onChange={(e) => setOrigin(e.target.value)}
-                            required
-                            fullWidth
-                            autoFocus
-                            inputProps={{ "aria-label": "origin address" }}
-                        />
-                        <TextField
-                            label="Destination address"
-                            placeholder="Where you're going"
-                            value={destination}
-                            onChange={(e) => setDestination(e.target.value)}
-                            required
-                            fullWidth
-                            inputProps={{ "aria-label": "destination address" }}
-                        />
-                        {error && <Alert severity="error">{error}</Alert>}
-                        <Stack
-                            direction="row"
-                            spacing={1.5}
-                            justifyContent="flex-end"
-                        >
-                            <Button
-                                component={RouterLink}
-                                to={ROUTES.trips}
-                                color="inherit"
+            <FadeIn delay={0.22}>
+                <Paper
+                    elevation={0}
+                    sx={{
+                        ...glassCardSx,
+                        p: { xs: 3, md: 4 },
+                    }}
+                >
+                    <Box component="form" onSubmit={onSubmit}>
+                        <Stack spacing={3}>
+                            <TextField
+                                label="Trip name"
+                                placeholder="e.g. Home → Work"
+                                helperText="Optional. Shown on the trips list."
+                                value={name}
+                                onChange={(e) => setName(e.target.value)}
+                                fullWidth
+                                inputProps={{ maxLength: 255 }}
+                            />
+                            <PlacesAutocompleteField
+                                label="Origin address"
+                                placeholder="Starting address"
+                                value={origin}
+                                onChange={setOrigin}
+                                required
+                                fullWidth
+                                autoFocus
+                                InputProps={{
+                                    startAdornment: (
+                                        <PlaceOutlined
+                                            fontSize="small"
+                                            sx={{
+                                                mr: 1,
+                                                color: "primary.main",
+                                            }}
+                                        />
+                                    ),
+                                }}
+                                inputProps={{ "aria-label": "origin address" }}
+                            />
+                            <PlacesAutocompleteField
+                                label="Destination address"
+                                placeholder="Where you're going"
+                                value={destination}
+                                onChange={setDestination}
+                                required
+                                fullWidth
+                                InputProps={{
+                                    startAdornment: (
+                                        <FlagOutlined
+                                            fontSize="small"
+                                            sx={{
+                                                mr: 1,
+                                                color: "warning.main",
+                                            }}
+                                        />
+                                    ),
+                                }}
+                                inputProps={{ "aria-label": "destination address" }}
+                            />
+                            {error && <Alert severity="error">{error}</Alert>}
+                            <Stack
+                                direction="row"
+                                spacing={1.5}
+                                justifyContent="flex-end"
+                                sx={{ pt: 1 }}
                             >
-                                Cancel
-                            </Button>
-                            <Button
-                                type="submit"
-                                variant="contained"
-                                disabled={disabled}
-                                startIcon={<RouteRounded />}
-                            >
-                                {pending ? "Creating…" : "Create trip"}
-                            </Button>
+                                <Button
+                                    component={RouterLink}
+                                    to={ROUTES.trips}
+                                    color="inherit"
+                                    sx={{ fontWeight: 600 }}
+                                >
+                                    Cancel
+                                </Button>
+                                <Button
+                                    type="submit"
+                                    variant="contained"
+                                    disabled={disabled}
+                                    startIcon={<RouteRounded />}
+                                    sx={{
+                                        borderRadius: 2,
+                                        px: 3,
+                                        fontWeight: 700,
+                                        background: disabled
+                                            ? undefined
+                                            : "linear-gradient(135deg, #1e40af 0%, #ef6c00 100%)",
+                                        boxShadow: disabled
+                                            ? undefined
+                                            : "0 10px 24px -12px rgba(30,64,175,0.55)",
+                                        "&:hover": {
+                                            background: disabled
+                                                ? undefined
+                                                : "linear-gradient(135deg, #1a3aa0 0%, #d65f00 100%)",
+                                        },
+                                    }}
+                                >
+                                    {pending ? "Creating…" : "Create trip"}
+                                </Button>
+                            </Stack>
                         </Stack>
-                    </Stack>
-                </Box>
-            </Paper>
-            <Typography variant="caption" color="text.secondary">
-                We'll start collecting both-direction samples at 15-minute
-                intervals from 06:00 to 21:00 immediately. The full heatmap
-                usually appears within a minute or two.
-            </Typography>
-        </Stack>
+                    </Box>
+                </Paper>
+            </FadeIn>
+            <FadeIn delay={0.35}>
+                <Typography
+                    variant="caption"
+                    color="text.secondary"
+                    sx={{ display: "block", mt: 2, textAlign: "center" }}
+                >
+                    We start sampling both directions at 15-minute intervals
+                    right away. The full heatmap usually fills in within a
+                    minute or two.
+                </Typography>
+            </FadeIn>
+        </Box>
     );
 }
 

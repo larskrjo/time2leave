@@ -37,7 +37,7 @@ dev: dev-be
 dev-be:
 	$(COMPOSE_DEV) up -d --build
 	@echo "API:    http://localhost:$${API_HOST_PORT:-8000}"
-	@echo "MySQL:  mysql://root:Abcd1234@localhost:$${MYSQL_HOST_PORT:-3307}/traffic_larsjohansen_com"
+	@echo "MySQL:  mysql://root:Abcd1234@localhost:$${MYSQL_HOST_PORT:-3307}/time2leave"
 
 ## dev-fe: Start the Vite dev server on the host.
 .PHONY: dev-fe

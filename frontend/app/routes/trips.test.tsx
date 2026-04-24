@@ -5,7 +5,7 @@
  */
 import { fireEvent, screen, waitFor } from "@testing-library/react";
 import { http, HttpResponse } from "msw";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import TripsPage from "~/routes/trips";
 import { sampleTripSummary, sampleUser } from "~/test/mocks/handlers";
@@ -34,11 +34,16 @@ describe("/trips route", () => {
 
         renderWithProviders(<TripsPage />, { initialEntries: ["/trips"] });
 
+        // Hero renders synchronously, then trips resolve via MSW.
         await waitFor(() =>
-            expect(screen.getByText("My trips")).toBeInTheDocument(),
+            expect(
+                screen.getByRole("heading", { name: /your saved trips/i }),
+            ).toBeInTheDocument(),
         );
-        expect(screen.getByText(sampleTripSummary.name!)).toBeInTheDocument();
-        expect(screen.getByText("Gym")).toBeInTheDocument();
+        expect(
+            await screen.findByText(sampleTripSummary.name!),
+        ).toBeInTheDocument();
+        expect(await screen.findByText("Gym")).toBeInTheDocument();
     });
 
     it("shows the empty state when the user has no trips", async () => {
@@ -49,8 +54,7 @@ describe("/trips route", () => {
         expect(await screen.findByText(/No trips yet/i)).toBeInTheDocument();
     });
 
-    it("optimistically removes a trip on delete and calls the API", async () => {
-        const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    it("optimistically removes a trip on delete and calls the API after undo window", async () => {
         server.use(http.get("*/api/v1/me", () => HttpResponse.json(sampleUser)));
         server.use(
             http.get("*/api/v1/trips", () =>
@@ -70,10 +74,15 @@ describe("/trips route", () => {
 
         fireEvent.click(screen.getByRole("button", { name: /delete trip/i }));
 
+        // Card disappears optimistically right away.
         await waitFor(() =>
             expect(screen.queryByText(sampleTripSummary.name!)).toBeNull(),
         );
-        expect(deleteCalled).toBe(true);
-        confirmSpy.mockRestore();
+
+        // User clicks the snackbar close button to flush the pending delete
+        // immediately, instead of waiting the full undo window.
+        fireEvent.click(screen.getByRole("button", { name: /^close$/i }));
+
+        await waitFor(() => expect(deleteCalled).toBe(true));
     });
 });

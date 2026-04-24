@@ -9,17 +9,34 @@ import '@fontsource/roboto/500.css';
 import '@fontsource/roboto/700.css';
 
 import {CssBaseline, ThemeProvider} from '@mui/material';
-import InitColorSchemeScript from '@mui/material/InitColorSchemeScript';
 
-import {theme} from './styles/theme';
+import {theme, COLOR_PREFERENCE_STORAGE_KEY} from './styles/theme';
 import Loading from "~/components/Loading";
 import {SessionProvider} from "~/lib/session";
+import {ColorModeProvider} from "~/lib/colorMode";
+
+// Inline, runs before React hydrates; prevents a light→dark flash by
+// setting the color-scheme attribute before any paint happens.
+//
+// Rules (mirror ColorModeProvider):
+//   - If a "light" or "dark" preference is persisted, honor it.
+//     The React layer will override back to auto for signed-out
+//     visitors after hydration; that's a one-frame mismatch at most.
+//   - Otherwise (no preference / "auto" / unknown), fall back to the
+//     local wall-clock: dark before 7am or at/after 7pm, else light.
+const noFlashScript = `(function(){try{var k=${JSON.stringify(
+    COLOR_PREFERENCE_STORAGE_KEY,
+)};var p=localStorage.getItem(k);var m;if(p==='light'||p==='dark'){m=p;}else{var h=new Date().getHours();m=(h<7||h>=19)?'dark':'light';}document.documentElement.setAttribute('data-mui-color-scheme',m);}catch(e){}})();`;
 
 
 export function meta({}: Route.MetaArgs) {
     return [
-        { title: "Traffic Commute Heatmap" },
-        { name: "description", content: "Commute time heatmap visualization" },
+        { title: "time2leave" },
+        {
+            name: "description",
+            content:
+                "Know exactly when to leave — per-trip commute heatmaps in 15-minute intervals, both directions.",
+        },
     ];
 }
 
@@ -53,15 +70,20 @@ export function Layout({ children }: { children: React.ReactNode }) {
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <Meta />
         <Links />
-        <InitColorSchemeScript
-          attribute="data-mui-color-scheme"
-          defaultMode="light"
+        <script
+          suppressHydrationWarning
+          dangerouslySetInnerHTML={{ __html: noFlashScript }}
         />
       </head>
       <body suppressHydrationWarning>
         <ThemeProvider theme={theme}>
           <CssBaseline />
-          <SessionProvider>{children}</SessionProvider>
+          {/* ColorModeProvider reads session status (unauth'd visitors
+              always get auto regardless of stored preference), so the
+              session context must be mounted first. */}
+          <SessionProvider>
+            <ColorModeProvider>{children}</ColorModeProvider>
+          </SessionProvider>
         </ThemeProvider>
         <ScrollRestoration />
         <Scripts />

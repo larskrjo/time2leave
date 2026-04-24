@@ -13,12 +13,20 @@
     -moz-osx-font-smoothing: grayscale;
 }
 
+/*
+ * Keep the body as a plain block container. Earlier versions of this
+ * file inherited Vite's starter styles (`display: flex; justify-content:
+ * center; align-items: center`) which turned body into a flex centering
+ * layout — that made any direct child (AppShell, Loading, splash) collapse
+ * to its intrinsic content width. Concretely, narrow skeleton silhouettes
+ * would render as a phone-width column pinned to the top-left on desktop.
+ *
+ * Every page owns its own full-viewport layout now (`PageBackdrop`, the
+ * Loading component, splash's hero wrapper), so we don't need the outer
+ * flex anymore.
+ */
 body {
     margin: 0;
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    min-width: 100%;
     min-height: 100dvh;
 }
 

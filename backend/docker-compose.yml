@@ -10,9 +10,12 @@ services:
       AWS_SDK_LOAD_CONFIG: "1"
       # MySQL lives in a sibling container named "mysql" on shared_network.
       # Credentials still come from AWS Secrets Manager (see app/config.py).
+      # The app's lifespan startup runs db/init/001_schema.sql idempotently,
+      # so flipping this to a new database name creates it on first boot
+      # (no manual DBA step). Predecessor: `traffic_larsjohansen_com`.
       MYSQL_HOST: "mysql"
       MYSQL_PORT: "3306"
-      MYSQL_DATABASE: "traffic_larsjohansen_com"
+      MYSQL_DATABASE: "time2leave"
     healthcheck:
       test: ["CMD-SHELL", "python healthcheck.py"]
       interval: 5s

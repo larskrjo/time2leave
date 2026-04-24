@@ -11,6 +11,7 @@ import { CssBaseline, ThemeProvider } from "@mui/material";
 import { MemoryRouter, Routes, Route } from "react-router";
 
 import { SessionProvider } from "~/lib/session";
+import { ColorModeProvider } from "~/lib/colorMode";
 import { theme } from "~/styles/theme";
 
 type ProviderOptions = {
@@ -40,13 +41,17 @@ export function renderWithProviders(
     return render(
         <ThemeProvider theme={theme}>
             <CssBaseline />
+            {/* Session must wrap ColorMode so useSession resolves
+                for the color-mode provider. */}
             <SessionProvider>
-                <MemoryRouter initialEntries={initialEntries}>
-                    <Routes>
-                        <Route path={matchPath} element={ui} />
-                        <Route path="*" element={<>fallback</>} />
-                    </Routes>
-                </MemoryRouter>
+                <ColorModeProvider>
+                    <MemoryRouter initialEntries={initialEntries}>
+                        <Routes>
+                            <Route path={matchPath} element={ui} />
+                            <Route path="*" element={<>fallback</>} />
+                        </Routes>
+                    </MemoryRouter>
+                </ColorModeProvider>
             </SessionProvider>
         </ThemeProvider>,
         options,

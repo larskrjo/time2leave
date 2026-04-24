@@ -83,6 +83,50 @@ def patched_app(
             raise TripNotFoundError("not found")
         del fake_trips_store[trip_id]
 
+    from app.services.trips import _UNSET
+
+    def fake_update(
+        *,
+        trip_id: int,
+        user_id: int,
+        name=_UNSET,
+        origin_address=None,
+        destination_address=None,
+    ):
+        trip = fake_trips_store.get(trip_id)
+        if not trip or trip.user_id != user_id:
+            raise TripNotFoundError("not found")
+        new_name = trip.name if name is _UNSET else name
+        new_origin = (
+            origin_address.strip()
+            if origin_address is not None
+            else trip.origin_address
+        )
+        new_destination = (
+            destination_address.strip()
+            if destination_address is not None
+            else trip.destination_address
+        )
+        if new_origin.lower() == new_destination.lower():
+            raise ValueError("same address")
+        addresses_changed = (
+            new_origin != trip.origin_address
+            or new_destination != trip.destination_address
+        )
+        updated = Trip(
+            id=trip.id,
+            user_id=trip.user_id,
+            name=new_name,
+            origin_address=new_origin,
+            destination_address=new_destination,
+            created_at=trip.created_at,
+        )
+        fake_trips_store[trip_id] = updated
+        return updated, addresses_changed
+
+    def fake_count(user_id: int) -> int:
+        return len([t for t in fake_trips_store.values() if t.user_id == user_id])
+
     def fake_heatmap(trip_id: int, week_start):  # noqa: ARG001
         return {
             "outbound": {"Mon": {"06:00": 42.0}},
@@ -100,6 +144,8 @@ def patched_app(
     monkeypatch.setattr(trips_api_mod, "get_trip_for_user", fake_get)
     monkeypatch.setattr(trips_api_mod, "create_trip", fake_create)
     monkeypatch.setattr(trips_api_mod, "soft_delete_trip", fake_soft_delete)
+    monkeypatch.setattr(trips_api_mod, "update_trip", fake_update)
+    monkeypatch.setattr(trips_api_mod, "count_trips_for_user", fake_count)
     monkeypatch.setattr(trips_api_mod, "get_heatmap_for_trip", fake_heatmap)
     monkeypatch.setattr(trips_api_mod, "sample_status_for_trip", fake_sample_status)
     # Prevent the background backfill from touching anything real.
@@ -224,8 +270,237 @@ def test_heatmap_returns_expected_shape(
     assert body["outbound"] == {"Mon": {"06:00": 42.0}}
 
 
+def test_quota_endpoint_reports_used_and_limit(
+    patched_app: TestClient, fake_trips_store: dict[int, Trip]
+) -> None:
+    fake_trips_store[1] = Trip(
+        id=1,
+        user_id=99,
+        name="x",
+        origin_address="a",
+        destination_address="b",
+        created_at=None,
+    )
+    r = patched_app.get("/api/v1/trips/quota")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["used"] == 1
+    assert body["limit"] >= 1
+
+
+def test_patch_trip_renames_without_touching_addresses(
+    patched_app: TestClient, fake_trips_store: dict[int, Trip]
+) -> None:
+    fake_trips_store[1] = Trip(
+        id=1,
+        user_id=99,
+        name="old",
+        origin_address="100 Main St",
+        destination_address="200 Oak Ave",
+        created_at=None,
+    )
+    r = patched_app.patch("/api/v1/trips/1", json={"name": "renamed"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["name"] == "renamed"
+    assert body["origin_address"] == "100 Main St"
+
+
+def test_patch_trip_swap_flips_origin_and_destination(
+    patched_app: TestClient, fake_trips_store: dict[int, Trip]
+) -> None:
+    fake_trips_store[1] = Trip(
+        id=1,
+        user_id=99,
+        name="x",
+        origin_address="100 Main St",
+        destination_address="200 Oak Ave",
+        created_at=None,
+    )
+    r = patched_app.patch("/api/v1/trips/1", json={"swap_addresses": True})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["origin_address"] == "200 Oak Ave"
+    assert body["destination_address"] == "100 Main St"
+
+
+def test_patch_trip_clear_name_sets_it_to_null(
+    patched_app: TestClient, fake_trips_store: dict[int, Trip]
+) -> None:
+    fake_trips_store[1] = Trip(
+        id=1,
+        user_id=99,
+        name="had a name",
+        origin_address="a st",
+        destination_address="b st",
+        created_at=None,
+    )
+    r = patched_app.patch("/api/v1/trips/1", json={"clear_name": True})
+    assert r.status_code == 200
+    assert r.json()["name"] is None
+
+
+def test_patch_trip_rejects_same_origin_destination(
+    patched_app: TestClient, fake_trips_store: dict[int, Trip]
+) -> None:
+    fake_trips_store[1] = Trip(
+        id=1,
+        user_id=99,
+        name="x",
+        origin_address="100 Main St",
+        destination_address="200 Oak Ave",
+        created_at=None,
+    )
+    r = patched_app.patch(
+        "/api/v1/trips/1",
+        json={"origin_address": "same addr", "destination_address": "same addr"},
+    )
+    assert r.status_code == 400
+
+
 def test_current_week_start_is_monday() -> None:
     # Thursday 2025-11-13 → Monday 2025-11-10
     from datetime import date as d
 
     assert trips_service.current_week_start(d(2025, 11, 13)) == d(2025, 11, 10)
+
+
+class _StubValidator:
+    """Test double that rejects a preconfigured set of addresses.
+
+    Lets us exercise the prod validation path without mocking the real
+    Google Geocoding HTTP call at the route layer.
+    """
+
+    def __init__(self, invalid: set[str]) -> None:
+        self._invalid = invalid
+        self.calls: list[str] = []
+
+    def validate(self, address: str):
+        from app.services.address_validation import AddressValidation
+
+        self.calls.append(address)
+        if address in self._invalid:
+            return AddressValidation(
+                is_valid=False, reason=f"fake: rejected {address!r}"
+            )
+        return AddressValidation(is_valid=True, canonical=address)
+
+
+def _install_validator(
+    monkeypatch: pytest.MonkeyPatch, invalid: set[str]
+) -> _StubValidator:
+    stub = _StubValidator(invalid=invalid)
+    import app.api.trips_api as trips_api_mod
+
+    monkeypatch.setattr(
+        trips_api_mod, "get_address_validator", lambda _settings=None: stub
+    )
+    return stub
+
+
+def test_create_trip_rejects_invalid_address(
+    patched_app: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    stub = _install_validator(monkeypatch, invalid={"bogus origin"})
+    r = patched_app.post(
+        "/api/v1/trips",
+        json={
+            "name": "Commute",
+            "origin_address": "bogus origin",
+            "destination_address": "200 Oak Ave",
+        },
+    )
+    assert r.status_code == 400
+    assert "bogus origin" in r.json()["detail"]
+    # The origin should short-circuit before the destination is checked.
+    assert stub.calls == ["bogus origin"]
+
+
+def test_create_trip_accepts_valid_addresses_via_validator(
+    patched_app: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    stub = _install_validator(monkeypatch, invalid=set())
+    r = patched_app.post(
+        "/api/v1/trips",
+        json={
+            "name": "Commute",
+            "origin_address": "100 Main St",
+            "destination_address": "200 Oak Ave",
+        },
+    )
+    assert r.status_code == 201
+    assert stub.calls == ["100 Main St", "200 Oak Ave"]
+
+
+def test_patch_trip_validates_only_changed_origin(
+    patched_app: TestClient,
+    fake_trips_store: dict[int, Trip],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_trips_store[1] = Trip(
+        id=1,
+        user_id=99,
+        name="x",
+        origin_address="100 Main St",
+        destination_address="200 Oak Ave",
+        created_at=None,
+    )
+    stub = _install_validator(monkeypatch, invalid={"junk"})
+    r = patched_app.patch(
+        "/api/v1/trips/1",
+        json={"origin_address": "junk"},
+    )
+    assert r.status_code == 400
+    # Destination wasn't in the request, so we shouldn't waste a
+    # Geocoding call on it.
+    assert stub.calls == ["junk"]
+
+
+def test_patch_trip_skips_validation_when_addresses_unchanged(
+    patched_app: TestClient,
+    fake_trips_store: dict[int, Trip],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_trips_store[1] = Trip(
+        id=1,
+        user_id=99,
+        name="x",
+        origin_address="100 Main St",
+        destination_address="200 Oak Ave",
+        created_at=None,
+    )
+    stub = _install_validator(monkeypatch, invalid=set())
+    r = patched_app.patch(
+        "/api/v1/trips/1",
+        json={
+            "origin_address": "100 Main St",
+            "destination_address": "200 Oak Ave",
+        },
+    )
+    assert r.status_code == 200
+    # Nothing actually changed, so the validator should be untouched.
+    assert stub.calls == []
+
+
+def test_patch_trip_swap_skips_validation(
+    patched_app: TestClient,
+    fake_trips_store: dict[int, Trip],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_trips_store[1] = Trip(
+        id=1,
+        user_id=99,
+        name="x",
+        origin_address="100 Main St",
+        destination_address="200 Oak Ave",
+        created_at=None,
+    )
+    # Both addresses would be "invalid" per the stub, but a swap is
+    # reusing already-stored values, so we skip validation.
+    stub = _install_validator(
+        monkeypatch, invalid={"100 Main St", "200 Oak Ave"}
+    )
+    r = patched_app.patch("/api/v1/trips/1", json={"swap_addresses": True})
+    assert r.status_code == 200
+    assert stub.calls == []

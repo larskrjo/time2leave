@@ -47,7 +47,7 @@ describe("/trips/:tripId route", () => {
         await screen.findByText(sampleTripDetail.name!);
         expect(screen.getByRole("tab", { name: /Outbound/i })).toBeInTheDocument();
         expect(screen.getByRole("tab", { name: /Return/i })).toBeInTheDocument();
-        expect(screen.queryByText(/Backfilling/i)).toBeNull();
+        expect(screen.queryByText(/Building your heatmap/i)).toBeNull();
     });
 
     it("shows backfill banner while < 100% and hides it once complete", async () => {
@@ -82,7 +82,9 @@ describe("/trips/:tripId route", () => {
             path: "/trips/:tripId",
         });
 
-        expect(await screen.findByText(/Backfilling/i)).toBeInTheDocument();
+        expect(
+            await screen.findByText(/Building your heatmap/i),
+        ).toBeInTheDocument();
 
         // Advance four 4-second polling cycles (25 → 50 → 75 → 100).
         for (let i = 0; i < 3; i += 1) {
@@ -91,7 +93,7 @@ describe("/trips/:tripId route", () => {
             });
         }
         await waitFor(() =>
-            expect(screen.queryByText(/Backfilling/i)).toBeNull(),
+            expect(screen.queryByText(/Building your heatmap/i)).toBeNull(),
         );
     });
 

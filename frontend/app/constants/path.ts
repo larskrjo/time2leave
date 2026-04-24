@@ -16,6 +16,7 @@ export const API = {
     authDevLogin: `${BASE_URL}/api/v1/auth/dev-login`,
     authConfig: `${BASE_URL}/api/v1/auth/config`,
     trips: `${BASE_URL}/api/v1/trips`,
+    tripQuota: `${BASE_URL}/api/v1/trips/quota`,
     trip: (id: number | string) => `${BASE_URL}/api/v1/trips/${id}`,
     tripHeatmap: (id: number | string) =>
         `${BASE_URL}/api/v1/trips/${id}/heatmap`,

@@ -68,6 +68,30 @@ export async function deleteTrip(id: number | string): Promise<void> {
     await apiFetch<null>(API.trip(id), { method: "DELETE" });
 }
 
+export type TripQuota = { used: number; limit: number };
+
+export async function getTripQuota(): Promise<TripQuota> {
+    return apiFetch<TripQuota>(API.tripQuota);
+}
+
+export type TripPatch = {
+    name?: string | null;
+    origin_address?: string;
+    destination_address?: string;
+    clear_name?: boolean;
+    swap_addresses?: boolean;
+};
+
+export async function updateTrip(
+    id: number | string,
+    patch: TripPatch,
+): Promise<TripDetail> {
+    return apiFetch<TripDetail>(API.trip(id), {
+        method: "PATCH",
+        body: JSON.stringify(patch),
+    });
+}
+
 export async function getTripHeatmap(
     id: number | string,
 ): Promise<HeatmapPayload> {

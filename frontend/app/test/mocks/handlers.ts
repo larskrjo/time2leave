@@ -72,11 +72,15 @@ export const handlers = [
     http.post("*/api/v1/auth/logout", () =>
         HttpResponse.json({ status: "ok" }),
     ),
+    http.get("*/api/v1/trips/quota", () =>
+        HttpResponse.json({ used: 1, limit: 3 }),
+    ),
     http.get("*/api/v1/trips", () => HttpResponse.json([sampleTripSummary])),
     http.get("*/api/v1/trips/:id", () => HttpResponse.json(sampleTripDetail)),
     http.post("*/api/v1/trips", () =>
         HttpResponse.json(sampleTripDetail, { status: 201 }),
     ),
+    http.patch("*/api/v1/trips/:id", () => HttpResponse.json(sampleTripDetail)),
     http.delete("*/api/v1/trips/:id", () =>
         HttpResponse.json(null, { status: 204 }),
     ),

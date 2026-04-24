@@ -29,10 +29,10 @@ describe("TripCard", () => {
         expect(screen.getByText(`Trip #${sampleTripSummary.id}`)).toBeInTheDocument();
     });
 
-    it("calls onDelete when the trash button is confirmed", async () => {
-        const confirmSpy = vi
-            .spyOn(window, "confirm")
-            .mockReturnValue(true);
+    it("calls onDelete immediately when the trash button is clicked", async () => {
+        // The new UX defers the actual API call to the parent route's undo
+        // snackbar, so TripCard itself just forwards the click without any
+        // confirm() prompt.
         const onDelete = vi.fn().mockResolvedValue(undefined);
 
         renderWithProviders(
@@ -40,22 +40,8 @@ describe("TripCard", () => {
         );
         fireEvent.click(screen.getByRole("button", { name: /delete trip/i }));
 
-        await waitFor(() => expect(onDelete).toHaveBeenCalledWith(sampleTripSummary));
-        confirmSpy.mockRestore();
-    });
-
-    it("skips onDelete when the user cancels", () => {
-        const confirmSpy = vi
-            .spyOn(window, "confirm")
-            .mockReturnValue(false);
-        const onDelete = vi.fn();
-
-        renderWithProviders(
-            <TripCard trip={sampleTripSummary} onDelete={onDelete} />,
+        await waitFor(() =>
+            expect(onDelete).toHaveBeenCalledWith(sampleTripSummary),
         );
-        fireEvent.click(screen.getByRole("button", { name: /delete trip/i }));
-
-        expect(onDelete).not.toHaveBeenCalled();
-        confirmSpy.mockRestore();
     });
 });

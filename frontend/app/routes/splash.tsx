@@ -28,17 +28,19 @@ import { motion, useReducedMotion } from "framer-motion";
 import { DemoHeatmap } from "~/components/DemoHeatmap";
 import { DevLoginButton } from "~/components/DevLoginButton";
 import { GoogleSignInButton } from "~/components/GoogleSignInButton";
+import { Wordmark } from "~/components/Wordmark";
+import { glassCardSx } from "~/components/motion";
 import { ROUTES } from "~/constants/path";
 import { useSession } from "~/lib/session";
 import Loading from "~/components/Loading";
 
 export function meta() {
     return [
-        { title: "Commute Heatmap · Know when to leave" },
+        { title: "time2leave — know exactly when" },
         {
             name: "description",
             content:
-                "Save any A→B trip and see exactly when to leave — down to the 15-minute interval, every day of the week.",
+                "Save any A→B trip and time2leave tells you exactly when — down to the 15-minute interval, every day of the week.",
         },
     ];
 }
@@ -152,20 +154,37 @@ export default function SplashPage() {
                 position: "relative",
                 minHeight: "100vh",
                 overflow: "hidden",
+                color: "text.primary",
                 background:
                     "linear-gradient(180deg, #f5f8ff 0%, #ffffff 60%, #fff8f0 100%)",
+                "[data-mui-color-scheme='dark'] &": {
+                    background:
+                        "linear-gradient(180deg, #0b1020 0%, #121a33 60%, #1a1528 100%)",
+                },
             }}
         >
             <AnimatedBackdrop />
 
+            {/* Brand anchor — small wordmark in the top-left so
+                visitors immediately know where they landed, without
+                competing with the hero headline for attention. */}
+            <Container maxWidth="lg" sx={{ pt: { xs: 3, md: 4 }, pb: 0 }}>
+                <Wordmark size="md" />
+            </Container>
+
+            {/* No theme toggle here by design: the signed-out
+                experience always mirrors local time (dark at night,
+                light during the day). The full three-state control
+                appears after sign-in. */}
+
             {/* Hero */}
-            <Container maxWidth="lg" sx={{ pt: { xs: 6, md: 12 }, pb: 8 }}>
+            <Container maxWidth="lg" sx={{ pt: { xs: 4, md: 8 }, pb: 8 }}>
                 <Stack
                     direction={{ xs: "column", md: "row" }}
                     spacing={{ xs: 6, md: 8 }}
                     alignItems="center"
                 >
-                    <Stack spacing={3} sx={{ flex: 1 }}>
+                    <Stack spacing={3} sx={{ flex: 1, minWidth: 0 }}>
                         <FadeIn>
                             <Typography
                                 variant="overline"
@@ -222,8 +241,16 @@ export default function SplashPage() {
                         </FadeIn>
                     </Stack>
 
-                    <FadeIn delay={0.3}>
-                        <Box sx={{ flex: 1, width: "100%" }}>
+                    {/* The flex sizing has to live on an element that is
+                        a direct child of the hero Stack — FadeIn wraps
+                        its children in a plain motion.div with no flex
+                        styles, so putting `flex: 1` inside FadeIn does
+                        nothing. `minWidth: 0` lets this column actually
+                        shrink on narrow viewports instead of forcing
+                        the whole hero wider than the Container and
+                        triggering the left/right clipping we had. */}
+                    <Box sx={{ flex: 1, minWidth: 0, width: "100%" }}>
+                        <FadeIn delay={0.3}>
                             <DemoHeatmap />
                             <Typography
                                 variant="caption"
@@ -234,10 +261,11 @@ export default function SplashPage() {
                                     mt: 1.5,
                                 }}
                             >
-                                Example: weekday commute, minutes per 15-min slot.
+                                A real heatmap: 7 days × 15-minute slots, both
+                                directions. Green = fast, red = sit in traffic.
                             </Typography>
-                        </Box>
-                    </FadeIn>
+                        </FadeIn>
+                    </Box>
                 </Stack>
             </Container>
 
@@ -265,11 +293,7 @@ export default function SplashPage() {
                                 variant="outlined"
                                 sx={{
                                     height: "100%",
-                                    borderRadius: 4,
-                                    backgroundColor:
-                                        "rgba(255,255,255,0.75)",
-                                    backdropFilter: "blur(6px)",
-                                    borderColor: "rgba(30,64,175,0.15)",
+                                    ...glassCardSx,
                                 }}
                             >
                                 <CardContent sx={{ p: { xs: 3, md: 4 } }}>

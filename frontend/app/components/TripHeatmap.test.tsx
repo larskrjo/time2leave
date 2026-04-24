@@ -25,10 +25,18 @@ describe("TripHeatmapSummary", () => {
             />,
         );
 
-        // Mon's fastest outbound sample is 09:00 (60 minutes), since 07:00=42
-        // Wait — actually the lowest is 07:00 (42).
+        // The summary chip for Mon should highlight the cheapest sample
+        // (07:00 internal → "7:00am" in the UI = 42m for the outbound
+        // fixture).
         expect(screen.getByText(/Mon · best/i)).toBeInTheDocument();
-        expect(screen.getByText(/07:00 · 42m/i)).toBeInTheDocument();
+        // Time + duration render as adjacent spans, so look for each
+        // across the full subtree via a text matcher.
+        expect(screen.getByText(/42m/i)).toBeInTheDocument();
+        expect(
+            screen.getAllByText((_, el) =>
+                (el?.textContent ?? "").includes("7:00am"),
+            ).length,
+        ).toBeGreaterThan(0);
     });
 
     it("shows a fallback when nothing has been sampled yet", () => {

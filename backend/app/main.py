@@ -22,6 +22,7 @@ from app.api.auth_api import auth_router
 from app.api.healthcheck_api import healthcheck_router
 from app.api.trips_api import trips_router
 from app.config import get_settings
+from app.db.schema_bootstrap import ensure_schema
 from app.job.data_gathering import main as data_gathering_main
 from app.services.allowlist import bootstrap_from_settings
 
@@ -62,8 +63,22 @@ def run_data_gathering() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Manage scheduler lifecycle + bootstrap allowlist."""
+    """Ensure schema, bootstrap allowlist, then manage scheduler lifecycle."""
     settings = get_settings()
+
+    # Idempotently create the database + tables before anything else touches
+    # the connection pool. Lets us cut prod over to a brand-new DB name
+    # (e.g. traffic_larsjohansen_com -> time2leave) without a manual DBA
+    # step: the app creates the new DB on first boot.
+    try:
+        ensure_schema(settings)
+    except Exception:
+        logger.exception(
+            "Schema bootstrap failed; the app will likely fail to serve "
+            "requests. Check MySQL reachability and the app user's "
+            "CREATE/DDL grants."
+        )
+        raise
 
     try:
         bootstrap_from_settings(settings)
@@ -104,7 +119,7 @@ def create_app() -> FastAPI:
     """Application factory. Exposed for tests and WSGI servers."""
     settings = get_settings()
     app = FastAPI(
-        title="Traffic Commute API", version="2.0.0", lifespan=lifespan
+        title="time2leave API", version="2.0.0", lifespan=lifespan
     )
 
     app.include_router(healthcheck_router)
@@ -114,7 +129,14 @@ def create_app() -> FastAPI:
         app.include_router(admin_router)
 
     if settings.app_env == "prod":
-        origins: list[str] = ["https://traffic.larsjohansen.com"]
+        # New canonical domain first, legacy alias kept during the
+        # migration so the old URL keeps working until DNS / any
+        # bookmarks fully move over.
+        origins: list[str] = [
+            "https://time2leave.com",
+            "https://www.time2leave.com",
+            "https://traffic.larsjohansen.com",
+        ]
         origin_regex: str | None = None
     else:
         origins = settings.allowed_origins
