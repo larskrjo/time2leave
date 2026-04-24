@@ -30,6 +30,11 @@ seeded `dev@example.com` is pre-allowlisted) — you'll land on `/trips`
 with one trip already populated. No Google Maps API key, OAuth client,
 or AWS credentials required.
 
+> **Upgrading from the single-user schema?** The `docker-entrypoint-initdb.d`
+> scripts only run on a fresh MySQL volume. Run `make clean && make dev-be`
+> once to wipe the old `commute_slots`-era volume and let the new
+> multi-user schema + dev-user seed apply.
+
 Run `make help` for the full target list (`test`, `typecheck`, `logs`,
 `seed`, `clean`, `deploy-frontend`, …).
 

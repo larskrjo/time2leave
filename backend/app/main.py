@@ -131,14 +131,34 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
+    def _origin_allowed(origin: str) -> bool:
+        if origin in origins:
+            return True
+        if origin_regex is not None:
+            import re
+
+            return re.match(origin_regex, origin) is not None
+        return False
+
     @app.exception_handler(Exception)
     async def _unhandled_exception_handler(
         request: Request, exc: Exception
     ) -> JSONResponse:
         logger.exception("Unhandled exception on %s %s", request.method, request.url)
+        # CORSMiddleware doesn't run on responses produced by exception
+        # handlers, so a raw 500 shows up in the browser as a confusing
+        # "blocked by CORS policy" instead of the actual error. Echo the
+        # headers manually when the request origin would have been allowed.
+        headers: dict[str, str] = {}
+        origin = request.headers.get("origin")
+        if origin and _origin_allowed(origin):
+            headers["access-control-allow-origin"] = origin
+            headers["access-control-allow-credentials"] = "true"
+            headers["vary"] = "Origin"
         return JSONResponse(
             status_code=500,
             content={"detail": "Internal server error", "error": str(exc)},
+            headers=headers,
         )
 
     return app
