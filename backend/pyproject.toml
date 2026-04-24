@@ -18,6 +18,8 @@ dependencies = [
     "matplotlib",
     "apscheduler",
     "pydantic-settings>=2.0",
+    "pyjwt>=2.8",
+    "google-auth>=2.33",
 ]
 
 [build-system]

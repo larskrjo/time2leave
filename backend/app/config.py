@@ -14,7 +14,7 @@ import os
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 logger = logging.getLogger(__name__)
@@ -31,7 +31,6 @@ class Settings(BaseSettings):
 
     app_env: AppEnv = "local"
 
-    # MySQL connection.
     mysql_host: str = "localhost"
     mysql_port: int = 3306
     mysql_user: str = "root"
@@ -39,13 +38,36 @@ class Settings(BaseSettings):
     mysql_database: str = "traffic_larsjohansen_com"
     mysql_pool_size: int = 5
 
-    # Data-gathering provider configuration.
     google_maps_api_key: str | None = None
     data_provider: Literal["google", "fixture"] = "fixture"
 
-    # AWS Secrets Manager (prod only).
     aws_secret_name: str = "MySecret"
     aws_region: str = "us-west-2"
+
+    # Google OAuth / session.
+    google_oauth_client_id: str | None = None
+    session_secret: str = "dev-only-change-me"
+    session_cookie_name: str = "tlh_session"
+    session_ttl_hours: int = 24 * 7
+    session_cookie_domain: str | None = None
+
+    # Access control.
+    admin_emails: list[str] = Field(default_factory=list)
+    auth_allowlist_bootstrap: list[str] = Field(default_factory=list)
+
+    # Per-user and global trip quotas.
+    max_trips_per_user: int = 3
+    max_trips_total: int = 150
+    # Fail-closed ceiling on Routes Matrix calls the Friday job may make.
+    max_weekly_routes_calls: int = 150_000
+
+    # Commute sampling window (local time).
+    commute_window_start_hour: int = 6
+    commute_window_end_hour: int = 21
+    commute_interval_minutes: int = 15
+    commute_days_per_week: int = 7
+    commute_throttle_every: int = 50
+    commute_throttle_seconds: float = 0.5
 
     # CORS origins allowed outside of prod. In prod we always allow exactly
     # https://traffic.larsjohansen.com.
@@ -57,6 +79,10 @@ class Settings(BaseSettings):
         ]
     )
 
+    # Allow POST /api/v1/auth/dev-login outside of prod. Useful for local dev
+    # and end-to-end tests so we don't need a real Google OAuth client.
+    enable_dev_login: bool = True
+
     # Admin endpoints (manual run of the data-gathering job, etc.) are only
     # mounted when this is truthy AND app_env != "prod".
     enable_admin_api: bool = True
@@ -67,6 +93,21 @@ class Settings(BaseSettings):
         extra="ignore",
         case_sensitive=False,
     )
+
+    @field_validator(
+        "admin_emails",
+        "auth_allowlist_bootstrap",
+        mode="before",
+    )
+    @classmethod
+    def _split_comma_separated(cls, v: object) -> object:
+        """Allow ADMIN_EMAILS=foo@a,bar@b to parse into a list."""
+        if isinstance(v, str):
+            parts = [p.strip().lower() for p in v.split(",") if p.strip()]
+            return parts
+        if isinstance(v, list):
+            return [str(x).strip().lower() for x in v]
+        return v
 
 
 def _apply_legacy_env_aliases() -> None:
@@ -116,6 +157,10 @@ def _load_from_aws_secrets_manager(settings: Settings) -> None:
         settings.google_maps_api_key = payload["google_maps_api_key"]
         if settings.data_provider == "fixture":
             settings.data_provider = "google"
+    if "google_oauth_client_id" in payload:
+        settings.google_oauth_client_id = payload["google_oauth_client_id"]
+    if "session_secret" in payload:
+        settings.session_secret = payload["session_secret"]
 
 
 @lru_cache(maxsize=1)
@@ -132,6 +177,7 @@ def get_settings() -> Settings:
 
     if settings.app_env == "prod":
         _load_from_aws_secrets_manager(settings)
+        settings.enable_dev_login = False
     else:
         logger.info(
             "Running in %s mode; skipping AWS Secrets Manager and using env/defaults",

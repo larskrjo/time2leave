@@ -40,10 +40,19 @@ class CommuteResult:
 
 
 class CommuteProvider(Protocol):
-    """Interface: return a CommuteResult for one origin→dest at one timestamp."""
+    """Interface: return a CommuteResult for one origin→dest at one timestamp.
+
+    `direction` is a provider hint ("outbound" / "return") so fixtures can
+    produce realistic morning vs evening curves without sniffing addresses.
+    Real providers (Google) ignore it.
+    """
 
     def fetch(
-        self, origin: str, destination: str, departure_rfc3339: str
+        self,
+        origin: str,
+        destination: str,
+        departure_rfc3339: str,
+        direction: str | None = None,
     ) -> CommuteResult: ...
 
 
@@ -61,8 +70,13 @@ class GoogleRoutesProvider:
         self._timeout = timeout_seconds
 
     def fetch(
-        self, origin: str, destination: str, departure_rfc3339: str
+        self,
+        origin: str,
+        destination: str,
+        departure_rfc3339: str,
+        direction: str | None = None,
     ) -> CommuteResult:
+        del direction  # unused — real Google call doesn't need the hint
         headers = {
             "Content-Type": "application/json",
             "X-Goog-Api-Key": self._api_key,
@@ -128,11 +142,15 @@ class FixtureProvider:
         self._base_distance = base_distance_meters
 
     def fetch(
-        self, origin: str, destination: str, departure_rfc3339: str
+        self,
+        origin: str,
+        destination: str,
+        departure_rfc3339: str,
+        direction: str | None = None,
     ) -> CommuteResult:
         ts = datetime.fromisoformat(departure_rfc3339)
-        direction = "H2W" if "San Jose" in origin else "W2H"
-        minutes = self._synthetic_minutes(direction, ts)
+        dir_hint = direction or ("outbound" if ts.hour < 13 else "return")
+        minutes = self._synthetic_minutes(dir_hint, ts, origin, destination)
         return CommuteResult(
             distance_meters=self._base_distance,
             duration=f"{int(round(minutes * 60))}s",
@@ -142,16 +160,22 @@ class FixtureProvider:
         )
 
     @staticmethod
-    def _synthetic_minutes(direction: str, ts: datetime) -> float:
+    def _synthetic_minutes(
+        direction: str, ts: datetime, origin: str, destination: str
+    ) -> float:
         hour = ts.hour + ts.minute / 60.0
-        weekday_bump = {0: 0, 1: 2, 2: 3, 3: 4, 4: 6}.get(ts.weekday(), 0)
-        if direction == "H2W":
+        weekday_bump = {0: 0, 1: 2, 2: 3, 3: 4, 4: 6}.get(ts.weekday(), -10)
+        # Origin/destination-dependent offset so different trips show
+        # different baselines instead of the identical fixture curve.
+        addr_bump = (abs(hash((origin, destination))) % 13) - 6
+        outbound = direction in ("outbound", "H2W")
+        if outbound:
             base, peak_hour, amp = 40.0, 8.25, 45.0
         else:
             base, peak_hour, amp = 45.0, 17.5, 50.0
         bell = math.exp(-((hour - peak_hour) ** 2) / (2 * 0.9**2))
         jitter = 2.5 * math.sin(ts.day * 0.7 + ts.hour * 0.3 + ts.minute * 0.05)
-        return round(base + amp * bell + weekday_bump + jitter, 1)
+        return round(base + amp * bell + weekday_bump + addr_bump + jitter, 1)
 
 
 def get_provider(settings: Settings | None = None) -> CommuteProvider:
