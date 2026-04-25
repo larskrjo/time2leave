@@ -1,5 +1,5 @@
 const DEFAULT_DEV_BASE_URL = "http://localhost:8000";
-const DEFAULT_PROD_BASE_URL = "https://api.traffic.larsjohansen.com";
+const DEFAULT_PROD_BASE_URL = "https://api.time2leave.com";
 
 const envBase = import.meta.env.VITE_API_BASE_URL as string | undefined;
 export const BASE_URL =

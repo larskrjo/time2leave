@@ -126,7 +126,7 @@ Add their email to the allowlist via the admin API:
 
 ```bash
 # requires being signed in as an ADMIN_EMAILS user; uses your browser cookie
-curl -X POST https://api.traffic.larsjohansen.com/api/v1/admin/allowlist \
+curl -X POST https://api.time2leave.com/api/v1/admin/allowlist \
      -H 'Content-Type: application/json' \
      --cookie "tlh_session=$YOUR_SESSION_JWT" \
      -d '{"email": "friend@example.com"}'
@@ -251,9 +251,9 @@ in prod.
 Smoke tests after deploy:
 
 ```bash
-curl https://api.traffic.larsjohansen.com/healthcheck
-curl https://api.traffic.larsjohansen.com/healthcheck/scheduler
-curl https://api.traffic.larsjohansen.com/api/v1/auth/config
+curl https://api.time2leave.com/healthcheck
+curl https://api.time2leave.com/healthcheck/scheduler
+curl https://api.time2leave.com/api/v1/auth/config
 ```
 
 ### Frontend — S3 + CloudFront
