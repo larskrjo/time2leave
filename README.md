@@ -80,7 +80,7 @@ Run `make help` for the full target list (`test`, `typecheck`, `logs`,
 | `MAX_TRIPS_TOTAL` | 10 | Global hard cap. New trips return 409 once reached. |
 | `MAX_TRIP_MUTATIONS_PER_WEEK` | 1 | Per-user rolling-7-day cap on trip creates + address-changing patches (each one fires a fresh Routes Matrix backfill ≈ $8.40). Returns 429 when exceeded. |
 | `MAX_WEEKLY_ROUTES_CALLS` | 150 000 | Friday cron aborts before any call if it would exceed this. |
-| Slots per trip per week | 60 × 15 × 7 × 2 = 12 600 | (60 quarter-hours of 06:00-21:00) × 7 days × 2 directions. |
+| Slots per trip per week | 60 × 7 × 2 = 840 | (60 quarter-hours of 06:00-21:00) × 7 days × 2 directions. |
 
 ## Backend
 
