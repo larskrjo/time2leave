@@ -1,5 +1,6 @@
 import { http, HttpResponse } from "msw";
 
+import type { AllowlistEntry } from "~/lib/admin";
 import type { HeatmapPayload } from "~/lib/trips";
 
 /**
@@ -38,6 +39,21 @@ export const sampleTripDetail = {
     ...sampleTripSummary,
     backfill: { total: 840, ready: 210, percent_complete: 25.0 },
 };
+
+export const sampleAllowlist: AllowlistEntry[] = [
+    {
+        id: 1,
+        email: "owner@example.com",
+        added_by: "bootstrap",
+        created_at: "2025-11-01T12:00:00",
+    },
+    {
+        id: 2,
+        email: "friend@example.com",
+        added_by: "owner@example.com",
+        created_at: "2025-11-02T08:30:00",
+    },
+];
 
 export const sampleHeatmapResponse: HeatmapPayload = {
     outbound: {
@@ -89,5 +105,23 @@ export const handlers = [
     ),
     http.get("*/api/v1/trips/:id/backfill-status", () =>
         HttpResponse.json({ total: 840, ready: 210, percent_complete: 25.0 }),
+    ),
+    http.get("*/api/v1/admin/allowlist", () =>
+        HttpResponse.json(sampleAllowlist),
+    ),
+    http.post("*/api/v1/admin/allowlist", async ({ request }) => {
+        const body = (await request.json()) as { email: string };
+        return HttpResponse.json(
+            {
+                id: 999,
+                email: body.email,
+                added_by: sampleUser.email,
+                created_at: new Date().toISOString(),
+            },
+            { status: 201 },
+        );
+    }),
+    http.delete("*/api/v1/admin/allowlist/:email", () =>
+        HttpResponse.json(null, { status: 204 }),
     ),
 ];

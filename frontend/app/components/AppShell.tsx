@@ -12,12 +12,19 @@ import {
     Avatar,
     Box,
     Container,
+    Divider,
     IconButton,
+    ListItemIcon,
+    ListItemText,
     Menu,
     MenuItem,
     Toolbar,
     Typography,
 } from "@mui/material";
+import {
+    LockPersonRounded,
+    LogoutRounded,
+} from "@mui/icons-material";
 import { Link as RouterLink, useNavigate } from "react-router";
 
 import { ColorModeToggle } from "~/components/ColorModeToggle";
@@ -176,8 +183,33 @@ export function AppShell({ children }: { children: ReactNode }) {
                                                 </Typography>
                                             </Box>
                                         </MenuItem>
+                                        {user.is_admin && (
+                                            <Box>
+                                                <Divider sx={{ my: 0.5 }} />
+                                                <MenuItem
+                                                    component={RouterLink}
+                                                    to={ROUTES.adminAllowlist}
+                                                    onClick={() =>
+                                                        setAnchor(null)
+                                                    }
+                                                >
+                                                    <ListItemIcon>
+                                                        <LockPersonRounded fontSize="small" />
+                                                    </ListItemIcon>
+                                                    <ListItemText>
+                                                        Manage allowlist
+                                                    </ListItemText>
+                                                </MenuItem>
+                                            </Box>
+                                        )}
+                                        <Divider sx={{ my: 0.5 }} />
                                         <MenuItem onClick={handleLogout}>
-                                            Sign out
+                                            <ListItemIcon>
+                                                <LogoutRounded fontSize="small" />
+                                            </ListItemIcon>
+                                            <ListItemText>
+                                                Sign out
+                                            </ListItemText>
                                         </MenuItem>
                                     </Menu>
                                 </>

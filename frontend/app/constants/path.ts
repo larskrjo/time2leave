@@ -22,6 +22,9 @@ export const API = {
         `${BASE_URL}/api/v1/trips/${id}/heatmap`,
     tripBackfillStatus: (id: number | string) =>
         `${BASE_URL}/api/v1/trips/${id}/backfill-status`,
+    adminAllowlist: `${BASE_URL}/api/v1/admin/allowlist`,
+    adminAllowlistEntry: (email: string) =>
+        `${BASE_URL}/api/v1/admin/allowlist/${encodeURIComponent(email)}`,
 } as const;
 
 export const ROUTES = {
@@ -29,4 +32,5 @@ export const ROUTES = {
     trips: "/trips",
     newTrip: "/trips/new",
     trip: (id: number | string) => `/trips/${id}`,
+    adminAllowlist: "/admin/allowlist",
 } as const;
