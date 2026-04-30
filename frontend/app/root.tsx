@@ -41,6 +41,13 @@ export function meta({}: Route.MetaArgs) {
 }
 
 export const links: Route.LinksFunction = () => [
+  // SVG favicon — preferred by all evergreen browsers (Chrome 80+,
+  // Firefox 41+, Safari 14+, Edge 80+). The brand wordmark's italic
+  // "2" on a gradient tile.
+  { rel: "icon", type: "image/svg+xml", href: "/favicon.svg" },
+  // iOS Safari adds-to-home-screen icon. SVGs work on iOS 17+; older
+  // versions fall back to a screenshot, which is acceptable for now.
+  { rel: "apple-touch-icon", href: "/favicon.svg" },
   { rel: "preconnect", href: "https://fonts.googleapis.com" },
   {
     rel: "preconnect",

@@ -23,6 +23,12 @@ type ProviderOptions = {
      * URL in `initialEntries`.
      */
     path?: string;
+    /**
+     * Attach `location.state` to the *first* initial entry. Used to
+     * simulate flows like "detail page navigated here with
+     * `pendingDelete`" without spinning up two route components.
+     */
+    initialState?: unknown;
 };
 
 export function renderWithProviders(
@@ -30,6 +36,7 @@ export function renderWithProviders(
     {
         initialEntries = ["/"],
         path,
+        initialState,
         ...options
     }: ProviderOptions & RenderOptions = {},
 ) {
@@ -38,6 +45,13 @@ export function renderWithProviders(
     // The "fallback" route catches any redirect target the test didn't
     // explicitly mount.
     const matchPath = path ?? initialEntries[0] ?? "/";
+    const entries =
+        initialState !== undefined && initialEntries.length > 0
+            ? [
+                  { pathname: initialEntries[0], state: initialState },
+                  ...initialEntries.slice(1),
+              ]
+            : initialEntries;
     return render(
         <ThemeProvider theme={theme}>
             <CssBaseline />
@@ -45,7 +59,7 @@ export function renderWithProviders(
                 for the color-mode provider. */}
             <SessionProvider>
                 <ColorModeProvider>
-                    <MemoryRouter initialEntries={initialEntries}>
+                    <MemoryRouter initialEntries={entries}>
                         <Routes>
                             <Route path={matchPath} element={ui} />
                             <Route path="*" element={<>fallback</>} />

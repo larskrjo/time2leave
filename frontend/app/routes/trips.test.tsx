@@ -85,4 +85,53 @@ describe("/trips route", () => {
 
         await waitFor(() => expect(deleteCalled).toBe(true));
     });
+
+    it("from /trips with state.pendingDelete: schedules exactly one DELETE call", async () => {
+        // Reproduces the detail-page-redirect path: user clicks Delete on
+        // /trips/$id, which navigates to /trips with `state.pendingDelete`.
+        // Pre-fix the trips list could schedule the same delete twice
+        // (the deps-driven re-fire of the pendingDelete effect, plus the
+        // Snackbar autoHide racing a sibling setTimeout), and the second
+        // DELETE 404'd the now-deleted trip — surfacing as "Trip not found"
+        // flicker. Both bugs would now show up here as deleteCount > 1
+        // or a "Trip not found" alert.
+        server.use(http.get("*/api/v1/me", () => HttpResponse.json(sampleUser)));
+        server.use(
+            http.get("*/api/v1/trips", () =>
+                HttpResponse.json([sampleTripSummary]),
+            ),
+        );
+        let deleteCount = 0;
+        server.use(
+            http.delete("*/api/v1/trips/:id", () => {
+                deleteCount += 1;
+                return deleteCount > 1
+                    ? HttpResponse.json(
+                          { detail: "Trip not found" },
+                          { status: 404 },
+                      )
+                    : HttpResponse.json(null, { status: 204 });
+            }),
+        );
+
+        renderWithProviders(<TripsPage />, {
+            initialEntries: ["/trips"],
+            initialState: { pendingDelete: sampleTripSummary },
+        });
+
+        // Wait for the optimistic removal to settle and the undo
+        // snackbar to appear. Finding the Undo button proves the
+        // schedule fired, without racing an ephemeral render of the
+        // card itself.
+        await screen.findByRole("button", { name: /undo/i });
+        expect(screen.queryByText(sampleTripSummary.name!)).toBeNull();
+
+        // Force the commit by clicking the snackbar's close button.
+        fireEvent.click(screen.getByRole("button", { name: /^close$/i }));
+
+        await waitFor(() => expect(deleteCount).toBe(1));
+        // No "Trip not found" banner — the fix prevents the second call
+        // that would 404.
+        expect(screen.queryByText(/trip not found/i)).toBeNull();
+    });
 });

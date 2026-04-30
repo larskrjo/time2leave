@@ -7,6 +7,14 @@
  * the snackbar dismisses. That removes the "are you sure?" friction
  * for a reversible action.
  *
+ * The undo timer is owned exclusively by the Snackbar's
+ * `autoHideDuration` — its `onClose("timeout")` is the single trigger
+ * for committing the delete. The unmount-cleanup effect handles the
+ * "user navigated away mid-undo" case. The detail-page entry path
+ * passes the trip via `location.state.pendingDelete`; a `useRef` guard
+ * stops React's effect-deps churn from queueing the same delete more
+ * than once.
+ *
  * Shortcuts:
  *   - n: go to /trips/new
  *   - / or focus-in-input: ignored so users can type normally
@@ -59,7 +67,6 @@ type PendingDelete = {
     // Keep the original index so we can re-insert into the list on
     // undo without rebuilding the whole thing.
     insertAt: number;
-    timer: number;
 };
 
 function TripListSkeleton() {
@@ -119,9 +126,18 @@ function TripsListInner() {
 
     // If the detail page redirected here with "delete me", defer-queue it
     // just like a normal delete so the undo affordance is consistent.
+    //
+    // The ref guard is load-bearing: `scheduleDelete` calls `setTrips`
+    // (optimistic removal), which is in this effect's dep array, so
+    // without the guard the effect would re-fire on the very same
+    // pendingDelete before React Router has flushed `state: null` —
+    // and we'd schedule the delete twice.
+    const handledPendingRef = useRef(false);
     useEffect(() => {
+        if (handledPendingRef.current) return;
         const state = location.state as { pendingDelete?: TripSummary } | null;
         if (!state?.pendingDelete || !trips) return;
+        handledPendingRef.current = true;
         const t = state.pendingDelete;
         scheduleDelete(t, trips.findIndex((x) => x.id === t.id));
         // Clear the state so a reload doesn't re-queue.
@@ -158,18 +174,17 @@ function TripsListInner() {
         (trip: TripSummary, insertAt: number) => {
             // If another delete is already pending, commit it first
             // (no more than one pending at a time keeps logic simple).
+            // The Snackbar's autoHideDuration is the single source of
+            // truth for the 5.5s undo window — there used to be a
+            // sibling setTimeout that fired commitDelete in parallel,
+            // and the resulting double-fire would 404 the second call.
             if (pending) {
-                window.clearTimeout(pending.timer);
                 void commitDelete(pending.trip);
             }
             setTrips((current) =>
                 current ? current.filter((t) => t.id !== trip.id) : current,
             );
-            const timer = window.setTimeout(() => {
-                setPending(null);
-                void commitDelete(trip);
-            }, UNDO_WINDOW_MS);
-            setPending({ trip, insertAt: Math.max(0, insertAt), timer });
+            setPending({ trip, insertAt: Math.max(0, insertAt) });
         },
         [pending, commitDelete],
     );
@@ -185,7 +200,6 @@ function TripsListInner() {
 
     const undoDelete = useCallback(() => {
         if (!pending) return;
-        window.clearTimeout(pending.timer);
         setTrips((current) => {
             if (!current) return current;
             if (current.some((t) => t.id === pending.trip.id)) return current;
@@ -222,7 +236,6 @@ function TripsListInner() {
         return () => {
             const p = pendingRef.current;
             if (p) {
-                window.clearTimeout(p.timer);
                 void commitDelete(p.trip);
             }
         };
@@ -370,7 +383,6 @@ function TripsListInner() {
                 onClose={(_e, reason) => {
                     // MUI swallows clickaway by default; we only act on timeouts.
                     if (reason === "timeout" && pending) {
-                        window.clearTimeout(pending.timer);
                         void commitDelete(pending.trip);
                         setPending(null);
                     }
@@ -398,7 +410,6 @@ function TripsListInner() {
                             color="inherit"
                             onClick={() => {
                                 if (!pending) return;
-                                window.clearTimeout(pending.timer);
                                 void commitDelete(pending.trip);
                                 setPending(null);
                             }}

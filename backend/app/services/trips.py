@@ -219,8 +219,26 @@ def _delete_samples_for_trip(trip_id: int) -> None:
 
 
 def soft_delete_trip(*, trip_id: int, user_id: int) -> None:
-    """Mark a trip deleted; samples cascade on hard delete later."""
+    """Mark a trip deleted; samples cascade on hard delete later.
+
+    Idempotent: deleting an already-soft-deleted trip is a no-op that
+    returns successfully, matching HTTP DELETE semantics. Only raises
+    `TripNotFoundError` when the trip never existed for this user, so
+    callers like the frontend's deferred-undo flow can't accidentally
+    surface a 404 just because they fired the same delete twice.
+    """
     with Database() as cursor:
+        cursor.execute(
+            "SELECT deleted_at FROM trips WHERE id = %s AND user_id = %s",
+            (trip_id, user_id),
+        )
+        row = cursor.fetchone()
+        if row is None:
+            raise TripNotFoundError(
+                f"Trip {trip_id} not found for user {user_id}"
+            )
+        if row[0] is not None:
+            return
         cursor.execute(
             """
             UPDATE trips
@@ -229,10 +247,6 @@ def soft_delete_trip(*, trip_id: int, user_id: int) -> None:
             """,
             (trip_id, user_id),
         )
-        if int(cursor.rowcount or 0) == 0:
-            raise TripNotFoundError(
-                f"Trip {trip_id} not found for user {user_id}"
-            )
 
 
 def list_active_trips() -> list[Trip]:
