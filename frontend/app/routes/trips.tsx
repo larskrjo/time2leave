@@ -310,26 +310,59 @@ function TripsListInner() {
                       : "Add a new trip (n)"
             }
         >
-            <span>
+            {/* Span needs to fill the row on xs so the wrapped button
+                stretches edge-to-edge instead of sitting compact on its
+                own line. `display: block` lets `width: 100%` apply even
+                inside the inline tooltip wrapper. */}
+            <Box
+                component="span"
+                sx={{
+                    display: "block",
+                    width: { xs: "100%", sm: "auto" },
+                }}
+            >
                 <Button
                     variant="contained"
                     startIcon={<AddRounded />}
                     component={RouterLink}
                     to={ROUTES.newTrip}
                     disabled={Boolean(atLimit)}
-                    sx={primaryCtaSx}
+                    sx={{
+                        ...primaryCtaSx,
+                        width: { xs: "100%", sm: "auto" },
+                    }}
                 >
                     New trip
                 </Button>
-            </span>
+            </Box>
         </Tooltip>
     );
 
+    // `useFlexGap` is required so wrapping rows get a real row-gap; with
+    // the default Stack `spacing` (margin-based), wrapped rows have no
+    // vertical breathing room. On xs we force the button onto its own
+    // row by giving its container `flexBasis: 100%`, then it stretches
+    // to fill via the inner `width: 100%`. On sm+ everything sits
+    // inline at the right edge of the hero.
     const heroRight = (
-        <Stack direction="row" spacing={1.25} alignItems="center" flexWrap="wrap">
+        <Stack
+            direction="row"
+            useFlexGap
+            flexWrap="wrap"
+            alignItems="center"
+            justifyContent={{ xs: "flex-start", md: "flex-end" }}
+            sx={{
+                rowGap: 1.5,
+                columnGap: 1.25,
+                width: { xs: "100%", md: "auto" },
+                "& > .new-trip-cta": {
+                    flexBasis: { xs: "100%", sm: "auto" },
+                },
+            }}
+        >
             {mutationsBadge}
             {quotaBadge}
-            {newTripButton}
+            <Box className="new-trip-cta">{newTripButton}</Box>
         </Stack>
     );
 
