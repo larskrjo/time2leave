@@ -38,8 +38,13 @@ def _executed_sql(cursor: MagicMock) -> list[str]:
     return [c.args[0] for c in cursor.execute.call_args_list]
 
 
-def test_soft_delete_active_trip_runs_select_then_update():
-    """Trip exists and isn't yet deleted: we look it up, then UPDATE."""
+def test_soft_delete_active_trip_runs_select_then_update_then_cascade():
+    """Active trip path: SELECT, UPDATE, then DELETE from commute_samples.
+
+    The cascade lives in the same transaction as the soft-delete so a
+    half-applied "trip looks deleted but its samples linger" state can
+    never be observed by the heatmap query.
+    """
     cursor, ctx = _patched_database()
     cursor.fetchone.return_value = (None,)  # deleted_at is currently NULL
 
@@ -51,10 +56,18 @@ def test_soft_delete_active_trip_runs_select_then_update():
     assert any(
         "UPDATE trips" in s and "SET deleted_at" in s for s in sql
     )
+    assert any(
+        "DELETE FROM commute_samples" in s and "trip_id" in s for s in sql
+    )
 
 
 def test_soft_delete_already_deleted_trip_is_idempotent_noop():
-    """Trip exists but `deleted_at` is set: silently succeed, no UPDATE."""
+    """Trip exists but `deleted_at` is set: silently succeed, no writes.
+
+    Critically, we also do NOT re-issue the cascade DELETE — it ran the
+    first time the trip was deleted, and a no-op DELETE on an empty set
+    of samples is just a wasted round-trip.
+    """
     cursor, ctx = _patched_database()
     cursor.fetchone.return_value = ("2026-04-30 09:50:00",)
 
@@ -63,8 +76,8 @@ def test_soft_delete_already_deleted_trip_is_idempotent_noop():
 
     sql = _executed_sql(cursor)
     assert any("SELECT deleted_at" in s for s in sql)
-    # The original deleted_at is preserved — no second write.
     assert not any("UPDATE trips" in s for s in sql)
+    assert not any("DELETE FROM commute_samples" in s for s in sql)
 
 
 def test_soft_delete_nonexistent_trip_raises():
@@ -79,3 +92,4 @@ def test_soft_delete_nonexistent_trip_raises():
     sql = _executed_sql(cursor)
     assert any("SELECT deleted_at" in s for s in sql)
     assert not any("UPDATE trips" in s for s in sql)
+    assert not any("DELETE FROM commute_samples" in s for s in sql)

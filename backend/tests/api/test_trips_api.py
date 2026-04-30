@@ -36,10 +36,17 @@ def fake_trips_store() -> dict[int, Trip]:
 
 
 @pytest.fixture
+def fake_mutation_log() -> list[dict]:
+    """Fake `trip_mutation_log` rows. Tests can inspect/seed this."""
+    return []
+
+
+@pytest.fixture
 def patched_app(
     monkeypatch: pytest.MonkeyPatch,
     logged_in_user: User,
     fake_trips_store: dict[int, Trip],
+    fake_mutation_log: list[dict],
 ) -> Iterator[TestClient]:
     monkeypatch.setenv("APP_ENV", "local")
     from app.config import reset_settings_cache
@@ -140,6 +147,36 @@ def patched_app(
 
     import app.api.trips_api as trips_api_mod
 
+    # In-memory `trip_mutation_log` so we can test the rolling-7-day cap
+    # without a DB. The fakes preserve the real service's invariants:
+    # `assert_mutation_quota` raises when at-or-over the cap, and
+    # `record_mutation` appends a row that future calls count against.
+    from app.services.trip_mutations import (
+        MutationQuota,
+        TripMutationQuotaExceededError,
+    )
+
+    def fake_assert_quota(user_id, settings):  # noqa: ARG001
+        used = sum(1 for r in fake_mutation_log if r["user_id"] == user_id)
+        limit = settings.max_trip_mutations_per_week
+        if used >= limit:
+            raise TripMutationQuotaExceededError(
+                used=used, limit=limit, retry_after_seconds=3600
+            )
+
+    def fake_mutation_quota(user_id, settings):
+        used = sum(1 for r in fake_mutation_log if r["user_id"] == user_id)
+        return MutationQuota(
+            used=used,
+            limit=settings.max_trip_mutations_per_week,
+            oldest_age_seconds=None if used == 0 else 60,
+        )
+
+    def fake_record_mutation(*, user_id, trip_id, kind):
+        fake_mutation_log.append(
+            {"user_id": user_id, "trip_id": trip_id, "kind": kind}
+        )
+
     monkeypatch.setattr(trips_api_mod, "list_trips_for_user", fake_list)
     monkeypatch.setattr(trips_api_mod, "get_trip_for_user", fake_get)
     monkeypatch.setattr(trips_api_mod, "create_trip", fake_create)
@@ -148,6 +185,11 @@ def patched_app(
     monkeypatch.setattr(trips_api_mod, "count_trips_for_user", fake_count)
     monkeypatch.setattr(trips_api_mod, "get_heatmap_for_trip", fake_heatmap)
     monkeypatch.setattr(trips_api_mod, "sample_status_for_trip", fake_sample_status)
+    monkeypatch.setattr(trips_api_mod, "assert_mutation_quota", fake_assert_quota)
+    monkeypatch.setattr(
+        trips_api_mod, "mutation_quota_for_user", fake_mutation_quota
+    )
+    monkeypatch.setattr(trips_api_mod, "record_mutation", fake_record_mutation)
     # Prevent the background backfill from touching anything real.
     monkeypatch.setattr(trips_api_mod, "_kickoff_backfill", lambda _id: None)
 
@@ -504,3 +546,174 @@ def test_patch_trip_swap_skips_validation(
     r = patched_app.patch("/api/v1/trips/1", json={"swap_addresses": True})
     assert r.status_code == 200
     assert stub.calls == []
+
+
+# ---------------------------------------------------------------------------
+# Weekly mutation quota
+# ---------------------------------------------------------------------------
+
+
+def test_quota_endpoint_includes_mutation_counters(
+    patched_app: TestClient,
+) -> None:
+    """The /quota endpoint should expose the rolling mutation budget."""
+    r = patched_app.get("/api/v1/trips/quota")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["used"] == 0
+    assert body["limit"] == 3
+    assert body["mutations_used"] == 0
+    assert body["mutations_limit"] == 3
+    assert body["mutations_oldest_age_seconds"] is None
+
+
+def test_create_trip_logs_a_mutation(
+    patched_app: TestClient, fake_mutation_log: list[dict]
+) -> None:
+    r = patched_app.post(
+        "/api/v1/trips",
+        json={"origin_address": "100 Main St", "destination_address": "200 Oak Ave"},
+    )
+    assert r.status_code == 201
+    assert len(fake_mutation_log) == 1
+    assert fake_mutation_log[0]["kind"] == "create"
+
+
+def test_create_trip_429_when_at_mutation_cap(
+    patched_app: TestClient,
+    fake_mutation_log: list[dict],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MAX_TRIP_MUTATIONS_PER_WEEK", "2")
+    from app.config import reset_settings_cache
+
+    reset_settings_cache()
+
+    # Pre-fill 2 mutations -> at the cap.
+    for _ in range(2):
+        fake_mutation_log.append({"user_id": 99, "trip_id": 1, "kind": "create"})
+
+    r = patched_app.post(
+        "/api/v1/trips",
+        json={
+            "origin_address": "100 Main St",
+            "destination_address": "200 Oak Ave",
+        },
+    )
+    assert r.status_code == 429
+    assert "weekly trip changes" in r.json()["detail"].lower()
+    assert "Retry-After" in r.headers
+
+
+def test_patch_name_only_does_not_count(
+    patched_app: TestClient,
+    fake_trips_store: dict[int, Trip],
+    fake_mutation_log: list[dict],
+) -> None:
+    fake_trips_store[1] = Trip(
+        id=1,
+        user_id=99,
+        name="x",
+        origin_address="100 Main St",
+        destination_address="200 Oak Ave",
+        created_at=None,
+    )
+    r = patched_app.patch("/api/v1/trips/1", json={"name": "Renamed"})
+    assert r.status_code == 200
+    # Name-only patch is free; mutation log untouched.
+    assert fake_mutation_log == []
+
+
+def test_patch_address_change_logs_a_mutation(
+    patched_app: TestClient,
+    fake_trips_store: dict[int, Trip],
+    fake_mutation_log: list[dict],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_trips_store[1] = Trip(
+        id=1,
+        user_id=99,
+        name="x",
+        origin_address="100 Main St",
+        destination_address="200 Oak Ave",
+        created_at=None,
+    )
+    _install_validator(monkeypatch, invalid=set())
+    r = patched_app.patch(
+        "/api/v1/trips/1", json={"origin_address": "999 Different St"}
+    )
+    assert r.status_code == 200
+    assert len(fake_mutation_log) == 1
+    assert fake_mutation_log[0]["kind"] == "address_change"
+
+
+def test_patch_swap_logs_a_mutation(
+    patched_app: TestClient,
+    fake_trips_store: dict[int, Trip],
+    fake_mutation_log: list[dict],
+) -> None:
+    fake_trips_store[1] = Trip(
+        id=1,
+        user_id=99,
+        name="x",
+        origin_address="100 Main St",
+        destination_address="200 Oak Ave",
+        created_at=None,
+    )
+    r = patched_app.patch("/api/v1/trips/1", json={"swap_addresses": True})
+    assert r.status_code == 200
+    assert len(fake_mutation_log) == 1
+    assert fake_mutation_log[0]["kind"] == "swap"
+
+
+def test_patch_address_change_429_when_at_cap(
+    patched_app: TestClient,
+    fake_trips_store: dict[int, Trip],
+    fake_mutation_log: list[dict],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MAX_TRIP_MUTATIONS_PER_WEEK", "2")
+    from app.config import reset_settings_cache
+
+    reset_settings_cache()
+
+    fake_trips_store[1] = Trip(
+        id=1,
+        user_id=99,
+        name="x",
+        origin_address="A",
+        destination_address="B",
+        created_at=None,
+    )
+    fake_mutation_log.extend(
+        [
+            {"user_id": 99, "trip_id": 1, "kind": "create"},
+            {"user_id": 99, "trip_id": 1, "kind": "address_change"},
+        ]
+    )
+
+    stub = _install_validator(monkeypatch, invalid=set())
+    r = patched_app.patch(
+        "/api/v1/trips/1", json={"origin_address": "C is different"}
+    )
+    assert r.status_code == 429
+    # Crucially: we 429 *before* paying for Geocoding.
+    assert stub.calls == []
+
+
+def test_delete_trip_does_not_consume_mutation(
+    patched_app: TestClient,
+    fake_trips_store: dict[int, Trip],
+    fake_mutation_log: list[dict],
+) -> None:
+    fake_trips_store[1] = Trip(
+        id=1,
+        user_id=99,
+        name="x",
+        origin_address="A",
+        destination_address="B",
+        created_at=None,
+    )
+    r = patched_app.delete("/api/v1/trips/1")
+    assert r.status_code == 204
+    assert fake_mutation_log == []

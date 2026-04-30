@@ -18,6 +18,14 @@ What runs when a user creates a trip (`backfill_trip_current_week`):
     the heatmap starts populating right away instead of waiting until
     Friday.
 
+Mid-backfill cancellation:
+
+    A user can delete a trip while its initial backfill is still
+    looping through ~840 slots. Since each slot costs a Routes Matrix
+    call (real money), we re-check `trips.deleted_at` once per throttle
+    batch and break the loop if it flips. Worst-case waste is one
+    throttle-batch of calls; typical waste is well under a dollar.
+
 Past-slot handling:
 
     Routes Matrix rejects `departureTime` values in the past, so when
@@ -201,6 +209,35 @@ def _fetch_pending_slots(trip_id: int, week_start: date) -> list[dict]:
     return list(rows)
 
 
+def _trip_is_soft_deleted(trip_id: int) -> bool:
+    """Return True iff `trips.deleted_at` is non-null for this trip.
+
+    Used as an abort signal mid-backfill: if the user deletes a trip
+    while we're walking its pending slots, we'd otherwise keep burning
+    Routes Matrix calls (and dollars) for samples nothing reads. The
+    check is a primary-key lookup, so it's cheap to run once per
+    throttle batch.
+
+    A trip that's been hard-deleted entirely is *also* treated as
+    "soft-deleted" here — the row is gone, so the loop should stop
+    just as much as if `deleted_at` had been stamped.
+    """
+    pool = get_pool()
+    connection = pool.get_connection()
+    try:
+        cur = connection.cursor()
+        cur.execute(
+            "SELECT deleted_at FROM trips WHERE id = %s", (trip_id,)
+        )
+        row = cur.fetchone()
+        cur.close()
+    finally:
+        connection.close()
+    if row is None:
+        return True
+    return row[0] is not None
+
+
 def _duration_string_to_seconds(value: str | None) -> int | None:
     """Parse Google's `"1234s"` duration string into integer seconds."""
     if not value:
@@ -277,6 +314,18 @@ def _fill_in_slots_for_trip(
                 settings.commute_throttle_every
                 and (idx + 1) % settings.commute_throttle_every == 0
             ):
+                # Bail out if the user deleted the trip mid-backfill.
+                # Bounded waste: at most one throttle-batch of Routes
+                # Matrix calls before we notice and stop.
+                if _trip_is_soft_deleted(trip.id):
+                    logger.info(
+                        "Trip %s soft-deleted mid-backfill; "
+                        "aborting at slot %s/%s",
+                        trip.id,
+                        idx + 1,
+                        len(pending),
+                    )
+                    break
                 time.sleep(settings.commute_throttle_seconds)
 
     return {"updated": updated, "errors": errors}

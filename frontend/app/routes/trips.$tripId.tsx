@@ -471,6 +471,11 @@ function TripDetailInner({ tripId }: { tripId: string }) {
     const [view, setView] = useState<Direction>("outbound");
     const [highlight, setHighlight] = useState<HeatmapHighlight>(null);
     const [error, setError] = useState<string | null>(null);
+    // 429 (weekly mutation cap) is a deliberate cost-control, not a
+    // failure -- render it as a warning rather than a red error.
+    const [errorSeverity, setErrorSeverity] = useState<"error" | "warning">(
+        "error",
+    );
     const [saving, setSaving] = useState(false);
     const [swapping, setSwapping] = useState(false);
     const [editing, setEditing] = useState(false);
@@ -555,6 +560,7 @@ function TripDetailInner({ tripId }: { tripId: string }) {
         async (patch: TripPatch) => {
             setSaving(true);
             setError(null);
+            setErrorSeverity("error");
             try {
                 const updated = await updateTrip(tripId, patch);
                 setTrip(updated);
@@ -566,7 +572,12 @@ function TripDetailInner({ tripId }: { tripId: string }) {
                     setHeatmap(h);
                 }
             } catch (err) {
-                setError(isApiError(err) ? err.detail : "Failed to save trip");
+                if (isApiError(err)) {
+                    setError(err.detail);
+                    setErrorSeverity(err.status === 429 ? "warning" : "error");
+                } else {
+                    setError("Failed to save trip");
+                }
             } finally {
                 setSaving(false);
             }
@@ -578,6 +589,7 @@ function TripDetailInner({ tripId }: { tripId: string }) {
         if (!trip) return;
         setSwapping(true);
         setError(null);
+        setErrorSeverity("error");
         try {
             const updated = await updateTrip(tripId, { swap_addresses: true });
             setTrip(updated);
@@ -585,7 +597,12 @@ function TripDetailInner({ tripId }: { tripId: string }) {
             const h = await getTripHeatmap(tripId);
             setHeatmap(h);
         } catch (err) {
-            setError(isApiError(err) ? err.detail : "Failed to swap trip");
+            if (isApiError(err)) {
+                setError(err.detail);
+                setErrorSeverity(err.status === 429 ? "warning" : "error");
+            } else {
+                setError("Failed to swap trip");
+            }
         } finally {
             setSwapping(false);
         }
@@ -671,7 +688,10 @@ function TripDetailInner({ tripId }: { tripId: string }) {
             />
             {error && (
                 <FadeIn>
-                    <Alert severity="error" onClose={() => setError(null)}>
+                    <Alert
+                        severity={errorSeverity}
+                        onClose={() => setError(null)}
+                    >
                         {error}
                     </Alert>
                 </FadeIn>

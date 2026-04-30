@@ -44,6 +44,12 @@ function NewTripForm() {
     const [destination, setDestination] = useState("");
     const [pending, setPending] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    // 429 (weekly mutation cap) is *not* really an error -- it's an
+    // intentional cost-control. Render it as a warning so users don't
+    // think something's broken.
+    const [errorSeverity, setErrorSeverity] = useState<"error" | "warning">(
+        "error",
+    );
 
     const disabled =
         pending ||
@@ -55,6 +61,7 @@ function NewTripForm() {
         e.preventDefault();
         setPending(true);
         setError(null);
+        setErrorSeverity("error");
         try {
             const trip = await createTrip({
                 name: name.trim() || null,
@@ -63,9 +70,12 @@ function NewTripForm() {
             });
             navigate(ROUTES.trip(trip.id));
         } catch (err) {
-            setError(
-                isApiError(err) ? err.detail : "Failed to create trip",
-            );
+            if (isApiError(err)) {
+                setError(err.detail);
+                setErrorSeverity(err.status === 429 ? "warning" : "error");
+            } else {
+                setError("Failed to create trip");
+            }
         } finally {
             setPending(false);
         }
@@ -152,7 +162,9 @@ function NewTripForm() {
                                 }}
                                 inputProps={{ "aria-label": "destination address" }}
                             />
-                            {error && <Alert severity="error">{error}</Alert>}
+                            {error && (
+                                <Alert severity={errorSeverity}>{error}</Alert>
+                            )}
                             <Stack
                                 direction="row"
                                 spacing={1.5}

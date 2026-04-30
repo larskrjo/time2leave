@@ -244,16 +244,24 @@ function TripsListInner() {
     const greetingName =
         user?.name?.split(" ")[0] ?? user?.email.split("@")[0] ?? "there";
 
-    const atLimit =
+    const atSlotLimit =
         quota !== null &&
         trips !== null &&
         trips.length >= quota.limit &&
         !pending;
 
+    // Per-user weekly cost cap. Each create / address-change patch
+    // counts; this gates the New Trip CTA before the user wastes a
+    // round-trip filling out the form.
+    const atMutationLimit =
+        quota !== null && quota.mutations_used >= quota.mutations_limit;
+
+    const atLimit = atSlotLimit || atMutationLimit;
+
     const quotaBadge = quota && (
         <Chip
-            variant={atLimit ? "filled" : "outlined"}
-            color={atLimit ? "warning" : "default"}
+            variant={atSlotLimit ? "filled" : "outlined"}
+            color={atSlotLimit ? "warning" : "default"}
             label={`${(trips?.length ?? quota.used)} / ${quota.limit} slots`}
             sx={{
                 fontWeight: 700,
@@ -266,12 +274,40 @@ function TripsListInner() {
         />
     );
 
+    // Only show the changes-this-week chip once the user has used at
+    // least one mutation; otherwise it's just noise on first load.
+    const mutationsBadge = quota && quota.mutations_used > 0 && (
+        <Tooltip
+            title={
+                atMutationLimit
+                    ? "You've used your weekly limit for trip changes. Older edits roll off automatically."
+                    : "Adding a trip or changing its addresses runs a fresh week of Google Maps lookups, so we cap weekly changes."
+            }
+        >
+            <Chip
+                variant={atMutationLimit ? "filled" : "outlined"}
+                color={atMutationLimit ? "warning" : "default"}
+                label={`${quota.mutations_used} / ${quota.mutations_limit} changes / wk`}
+                sx={{
+                    fontWeight: 700,
+                    letterSpacing: 0.3,
+                    borderRadius: 1.5,
+                    height: 36,
+                    px: 0.5,
+                    backdropFilter: "blur(6px)",
+                }}
+            />
+        </Tooltip>
+    );
+
     const newTripButton = (
         <Tooltip
             title={
-                atLimit
+                atSlotLimit
                     ? `Trip limit is ${quota?.limit}. Delete one to add another.`
-                    : "Add a new trip (n)"
+                    : atMutationLimit
+                      ? "You've hit your weekly limit for trip changes. Try again in a few days."
+                      : "Add a new trip (n)"
             }
         >
             <span>
@@ -290,7 +326,8 @@ function TripsListInner() {
     );
 
     const heroRight = (
-        <Stack direction="row" spacing={1.25} alignItems="center">
+        <Stack direction="row" spacing={1.25} alignItems="center" flexWrap="wrap">
+            {mutationsBadge}
             {quotaBadge}
             {newTripButton}
         </Stack>
@@ -356,15 +393,26 @@ function TripsListInner() {
                             and we'll build the heatmap for this week in a
                             minute or two.
                         </Typography>
-                        <Button
-                            variant="contained"
-                            startIcon={<AddRounded />}
-                            component={RouterLink}
-                            to={ROUTES.newTrip}
-                            sx={primaryCtaSx}
+                        <Tooltip
+                            title={
+                                atMutationLimit
+                                    ? "You've hit your weekly limit for trip changes. Try again in a few days."
+                                    : ""
+                            }
                         >
-                            Add your first trip
-                        </Button>
+                            <span>
+                                <Button
+                                    variant="contained"
+                                    startIcon={<AddRounded />}
+                                    component={RouterLink}
+                                    to={ROUTES.newTrip}
+                                    disabled={Boolean(atMutationLimit)}
+                                    sx={primaryCtaSx}
+                                >
+                                    Add your first trip
+                                </Button>
+                            </span>
+                        </Tooltip>
                     </Paper>
                 </FadeIn>
             ) : (

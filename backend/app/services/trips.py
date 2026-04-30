@@ -219,7 +219,17 @@ def _delete_samples_for_trip(trip_id: int) -> None:
 
 
 def soft_delete_trip(*, trip_id: int, user_id: int) -> None:
-    """Mark a trip deleted; samples cascade on hard delete later.
+    """Mark a trip deleted and drop its sampled commute data.
+
+    On the first deletion we both stamp `trips.deleted_at` and
+    cascade-delete the trip's `commute_samples` rows so storage doesn't
+    leak. The frontend's 5.5s undo snackbar runs *before* this is even
+    called, so we don't need to keep the samples around for a "restore"
+    feature — by the time we arrive here, the user has already passed
+    that affordance. Hard-delete cleanup of the soft-deleted trip row
+    itself is intentionally deferred (a separate periodic job, not yet
+    written) so we still have the row to disambiguate "never existed"
+    vs "deleted" responses for in-flight clients.
 
     Idempotent: deleting an already-soft-deleted trip is a no-op that
     returns successfully, matching HTTP DELETE semantics. Only raises
@@ -246,6 +256,10 @@ def soft_delete_trip(*, trip_id: int, user_id: int) -> None:
             WHERE id = %s AND user_id = %s AND deleted_at IS NULL
             """,
             (trip_id, user_id),
+        )
+        cursor.execute(
+            "DELETE FROM commute_samples WHERE trip_id = %s",
+            (trip_id,),
         )
 
 

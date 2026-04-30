@@ -89,7 +89,13 @@ export const handlers = [
         HttpResponse.json({ status: "ok" }),
     ),
     http.get("*/api/v1/trips/quota", () =>
-        HttpResponse.json({ used: 1, limit: 3 }),
+        HttpResponse.json({
+            used: 1,
+            limit: 3,
+            mutations_used: 0,
+            mutations_limit: 3,
+            mutations_oldest_age_seconds: null,
+        }),
     ),
     http.get("*/api/v1/trips", () => HttpResponse.json([sampleTripSummary])),
     http.get("*/api/v1/trips/:id", () => HttpResponse.json(sampleTripDetail)),

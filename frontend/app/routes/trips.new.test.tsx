@@ -106,4 +106,42 @@ describe("/trips/new route", () => {
             await screen.findByText(/Per-user trip cap of 3 reached/i),
         ).toBeInTheDocument();
     });
+
+    it("renders 429 mutation-cap as a warning Alert, not an error", async () => {
+        server.use(http.get("*/api/v1/me", () => HttpResponse.json(sampleUser)));
+        server.use(
+            http.post("*/api/v1/trips", () =>
+                HttpResponse.json(
+                    {
+                        detail: "You've used 3 of 3 weekly trip changes. Each trip create or address edit triggers a fresh week of Google Maps lookups, so we cap edits to keep costs bounded. Your next slot opens automatically as older edits age out.",
+                    },
+                    { status: 429 },
+                ),
+            ),
+        );
+
+        renderWithProviders(<NewTripPage />, {
+            initialEntries: ["/trips/new"],
+        });
+
+        await waitFor(() =>
+            expect(
+                screen.getByRole("button", { name: /Create trip/i }),
+            ).toBeInTheDocument(),
+        );
+
+        fireEvent.change(screen.getByLabelText("origin address"), {
+            target: { value: "100 A St" },
+        });
+        fireEvent.change(screen.getByLabelText("destination address"), {
+            target: { value: "200 B Ave" },
+        });
+        fireEvent.click(screen.getByRole("button", { name: /Create trip/i }));
+
+        // The text should appear, and the alert should be a "warning"
+        // (yellow) not an "error" (red) — this is intentional gating.
+        const alert = await screen.findByRole("alert");
+        expect(alert).toHaveTextContent(/3 of 3 weekly trip changes/i);
+        expect(alert.className).toMatch(/colorWarning|standardWarning/);
+    });
 });

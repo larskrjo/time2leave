@@ -86,6 +86,60 @@ describe("/trips route", () => {
         await waitFor(() => expect(deleteCalled).toBe(true));
     });
 
+    it("shows a 'changes / wk' chip and disables New Trip when the mutation cap is hit", async () => {
+        server.use(http.get("*/api/v1/me", () => HttpResponse.json(sampleUser)));
+        server.use(http.get("*/api/v1/trips", () => HttpResponse.json([])));
+        server.use(
+            http.get("*/api/v1/trips/quota", () =>
+                HttpResponse.json({
+                    used: 0,
+                    limit: 3,
+                    mutations_used: 3,
+                    mutations_limit: 3,
+                    mutations_oldest_age_seconds: 60,
+                }),
+            ),
+        );
+
+        renderWithProviders(<TripsPage />, { initialEntries: ["/trips"] });
+
+        // Mutation chip surfaces the rolling 7-day count.
+        expect(
+            await screen.findByText(/3 \/ 3 changes \/ wk/i),
+        ).toBeInTheDocument();
+        // The empty-state CTA renders as a MUI Button + RouterLink (so
+        // the underlying element is an `<a>`, not `<button>`). When
+        // disabled, MUI sets `aria-disabled` on the rendered element.
+        const firstTripBtn = await screen.findByText(/add your first trip/i);
+        const cta = firstTripBtn.closest("a, button");
+        expect(cta).not.toBeNull();
+        expect(cta).toHaveAttribute("aria-disabled", "true");
+    });
+
+    it("hides the 'changes / wk' chip when the user has zero mutations", async () => {
+        server.use(http.get("*/api/v1/me", () => HttpResponse.json(sampleUser)));
+        server.use(
+            http.get("*/api/v1/trips", () =>
+                HttpResponse.json([sampleTripSummary]),
+            ),
+        );
+        server.use(
+            http.get("*/api/v1/trips/quota", () =>
+                HttpResponse.json({
+                    used: 1,
+                    limit: 3,
+                    mutations_used: 0,
+                    mutations_limit: 3,
+                    mutations_oldest_age_seconds: null,
+                }),
+            ),
+        );
+
+        renderWithProviders(<TripsPage />, { initialEntries: ["/trips"] });
+        await screen.findByText(sampleTripSummary.name!);
+        expect(screen.queryByText(/changes \/ wk/i)).toBeNull();
+    });
+
     it("from /trips with state.pendingDelete: schedules exactly one DELETE call", async () => {
         // Reproduces the detail-page-redirect path: user clicks Delete on
         // /trips/$id, which navigates to /trips with `state.pendingDelete`.

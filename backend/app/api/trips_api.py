@@ -19,6 +19,16 @@ from app.services.address_validation import (
     AddressValidator,
     get_address_validator,
 )
+from app.services.trip_mutations import (
+    TripMutationQuotaExceededError,
+    record_mutation,
+)
+from app.services.trip_mutations import (
+    assert_within_quota as assert_mutation_quota,
+)
+from app.services.trip_mutations import (
+    quota_for_user as mutation_quota_for_user,
+)
 from app.services.trips import (
     Trip,
     TripNotFoundError,
@@ -72,8 +82,16 @@ class TripPatch(BaseModel):
 
 
 class QuotaInfo(BaseModel):
+    # Trip *count* quota (existing): how many of the user's trip slots are taken.
     used: int
     limit: int
+    # Rolling-7-day "billed mutation" quota: trip creates and address-changing
+    # patches. The SPA disables the New Trip button + the address fields on the
+    # detail page when `mutations_used >= mutations_limit`, and shows a friendly
+    # "your next slot opens in N hours" hint based on `mutations_oldest_age_seconds`.
+    mutations_used: int
+    mutations_limit: int
+    mutations_oldest_age_seconds: int | None = None
 
 
 class BackfillStatus(BaseModel):
@@ -171,9 +189,30 @@ async def get_my_quota(
     user: User = Depends(get_current_user),
     settings: Settings = Depends(get_settings),
 ) -> QuotaInfo:
-    """Return how many of the per-user trip slots are taken."""
+    """Return slot usage *and* rolling-7-day mutation usage for the caller."""
+    mq = mutation_quota_for_user(user.id, settings)
     return QuotaInfo(
-        used=count_trips_for_user(user.id), limit=settings.max_trips_per_user
+        used=count_trips_for_user(user.id),
+        limit=settings.max_trips_per_user,
+        mutations_used=mq.used,
+        mutations_limit=mq.limit,
+        mutations_oldest_age_seconds=mq.oldest_age_seconds,
+    )
+
+
+def _raise_mutation_quota_429(
+    exc: TripMutationQuotaExceededError,
+) -> HTTPException:
+    """Translate the service-layer quota exception to a 429 with Retry-After."""
+    return HTTPException(
+        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+        detail=(
+            f"You've used {exc.used} of {exc.limit} weekly trip changes. "
+            "Each trip create or address edit triggers a fresh week of "
+            "Google Maps lookups, so we cap edits to keep costs bounded. "
+            "Your next slot opens automatically as older edits age out."
+        ),
+        headers={"Retry-After": str(exc.retry_after_seconds)},
     )
 
 
@@ -192,6 +231,13 @@ async def create_my_trip(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Origin and destination cannot be the same address",
         )
+
+    # Weekly cost cap: refuse before we even pay for the Geocoding pre-flight
+    # so an abusive user can't drain the bill by hammering POST.
+    try:
+        assert_mutation_quota(user.id, settings)
+    except TripMutationQuotaExceededError as exc:
+        raise _raise_mutation_quota_429(exc) from exc
 
     # Cheap Geocoding pre-flight so we don't burn ~840 Routes Matrix
     # calls on a garbage address. No-op in dev / with fixture provider.
@@ -213,6 +259,19 @@ async def create_my_trip(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT, detail=str(exc)
         ) from exc
+
+    # Logged after the trip row is committed so a failed create doesn't
+    # consume a mutation slot. Wrap broadly because a DB hiccup here
+    # shouldn't 500 a successful trip create — better to serve a stale
+    # quota than to fail the user-visible action.
+    try:
+        record_mutation(user_id=user.id, trip_id=trip.id, kind="create")
+    except Exception:
+        logger.exception(
+            "Failed to record trip-creation mutation for user %s trip %s",
+            user.id,
+            trip.id,
+        )
 
     background_tasks.add_task(_kickoff_backfill, trip.id)
     return TripDetail(**_trip_to_out(trip).model_dump(), backfill=_backfill_for(trip.id))
@@ -251,38 +310,73 @@ async def update_my_trip(
     """
     from app.services.trips import _UNSET
 
+    # Pre-load the current trip so we can decide up-front whether this
+    # patch will *actually* change addresses. The mutation quota check
+    # and the Geocoding pre-flight should both fire ONLY for true address
+    # mutations — a name-only rename is free, by design.
+    try:
+        current_trip = get_trip_for_user(trip_id=trip_id, user_id=user.id)
+    except TripNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Trip not found"
+        ) from exc
+
     if body.swap_addresses:
         # Addresses being swapped are already in the DB (and thus
         # already passed validation when they were first set), so we
         # skip re-validating them here.
-        current = get_trip_for_user(trip_id=trip_id, user_id=user.id)
-        new_origin: str | None = current.destination_address
-        new_destination: str | None = current.origin_address
+        new_origin: str | None = current_trip.destination_address
+        new_destination: str | None = current_trip.origin_address
+        will_change_addresses = (
+            current_trip.origin_address != current_trip.destination_address
+        )
+        mutation_kind: str = "swap"
     else:
         new_origin = body.origin_address
         new_destination = body.destination_address
-        # Validate only the fields that actually changed vs the DB so
-        # we don't spend Geocoding calls on unchanged values in a
-        # name-only rename.
-        if body.origin_address is not None or body.destination_address is not None:
-            current_trip = get_trip_for_user(trip_id=trip_id, user_id=user.id)
-            to_validate: list[tuple[str, str]] = []
-            if (
-                body.origin_address is not None
-                and body.origin_address.strip() != current_trip.origin_address
-            ):
-                to_validate.append(("origin", body.origin_address.strip()))
-            if (
-                body.destination_address is not None
-                and body.destination_address.strip() != current_trip.destination_address
-            ):
-                to_validate.append(
-                    ("destination", body.destination_address.strip())
-                )
-            if to_validate:
-                _validate_addresses_or_400(
-                    to_validate, get_address_validator(settings)
-                )
+        # Compare the candidate values to the DB to determine whether
+        # this patch is "billed". Strip whitespace so trailing-newline
+        # edits don't trigger a backfill (and a mutation count) for what
+        # is effectively the same address.
+        origin_changes = (
+            body.origin_address is not None
+            and body.origin_address.strip() != current_trip.origin_address
+        )
+        destination_changes = (
+            body.destination_address is not None
+            and body.destination_address.strip() != current_trip.destination_address
+        )
+        will_change_addresses = origin_changes or destination_changes
+        mutation_kind = "address_change"
+
+    # Cap-check *before* paying for Geocoding when this patch is billed.
+    if will_change_addresses:
+        try:
+            assert_mutation_quota(user.id, settings)
+        except TripMutationQuotaExceededError as exc:
+            raise _raise_mutation_quota_429(exc) from exc
+
+    if not body.swap_addresses and (
+        body.origin_address is not None or body.destination_address is not None
+    ):
+        to_validate: list[tuple[str, str]] = []
+        if (
+            body.origin_address is not None
+            and body.origin_address.strip() != current_trip.origin_address
+        ):
+            to_validate.append(("origin", body.origin_address.strip()))
+        if (
+            body.destination_address is not None
+            and body.destination_address.strip()
+            != current_trip.destination_address
+        ):
+            to_validate.append(
+                ("destination", body.destination_address.strip())
+            )
+        if to_validate:
+            _validate_addresses_or_400(
+                to_validate, get_address_validator(settings)
+            )
 
     try:
         trip, addresses_changed = update_trip(
@@ -302,6 +396,16 @@ async def update_my_trip(
         ) from exc
 
     if addresses_changed:
+        try:
+            record_mutation(
+                user_id=user.id, trip_id=trip.id, kind=mutation_kind  # type: ignore[arg-type]
+            )
+        except Exception:
+            logger.exception(
+                "Failed to record trip mutation for user %s trip %s",
+                user.id,
+                trip.id,
+            )
         background_tasks.add_task(_kickoff_backfill, trip.id)
 
     return TripDetail(**_trip_to_out(trip).model_dump(), backfill=_backfill_for(trip.id))

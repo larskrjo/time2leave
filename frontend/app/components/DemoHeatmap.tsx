@@ -76,12 +76,20 @@ function synthMinutes(dayIdx: number, slotIdx: number): number {
 }
 
 /** Same palette function as `TripHeatmap` so the demo matches. */
-function colorFor(minutes: number, maxMinutes: number): string {
+function colorFor(
+    minutes: number,
+    minMinutes: number,
+    maxMinutes: number,
+): string {
     if (maxMinutes <= 0) return "hsl(200 20% 92%)";
-    const t = Math.min(1, Math.max(0, minutes / maxMinutes));
-    const hue = 138 - t * 138;
-    const sat = 68;
-    const light = 52 + (1 - t) * 18;
+    if (maxMinutes === minMinutes) return "hsl(60 70% 60%)";
+    const t = Math.min(
+        1,
+        Math.max(0, (minutes - minMinutes) / (maxMinutes - minMinutes)),
+    );
+    const hue = 120 - t * 120;
+    const sat = 70;
+    const light = 52 + (1 - t) * 14;
     return `hsl(${hue} ${sat}% ${light}%)`;
 }
 
@@ -104,8 +112,9 @@ export function DemoHeatmap() {
     // we render the full desktop grid below.
     const isMobile = useMediaQuery(theme.breakpoints.down("sm"));
 
-    const { matrix, maxMinutes, bestPerDay } = useMemo(() => {
+    const { matrix, minMinutes, maxMinutes, bestPerDay } = useMemo(() => {
         const m: number[][] = [];
+        let mn = Number.POSITIVE_INFINITY;
         let mx = 0;
         for (let d = 0; d < DAYS.length; d += 1) {
             const row: number[] = [];
@@ -113,6 +122,7 @@ export function DemoHeatmap() {
                 const v = synthMinutes(d, s);
                 row.push(v);
                 if (v > mx) mx = v;
+                if (v < mn) mn = v;
             }
             m.push(row);
         }
@@ -130,7 +140,12 @@ export function DemoHeatmap() {
                 minutes: m[d][bestIdx],
             });
         }
-        return { matrix: m, maxMinutes: mx, bestPerDay: best };
+        return {
+            matrix: m,
+            minMinutes: Number.isFinite(mn) ? mn : 0,
+            maxMinutes: mx,
+            bestPerDay: best,
+        };
     }, []);
 
     // Cycle through weekdays' "best" cells so the preview demonstrates
@@ -231,6 +246,7 @@ export function DemoHeatmap() {
             {isMobile ? (
                 <MobileDemoBody
                     matrix={matrix}
+                    minMinutes={minMinutes}
                     maxMinutes={maxMinutes}
                     bestPerDay={bestPerDay}
                     cursor={cursor}
@@ -239,6 +255,7 @@ export function DemoHeatmap() {
             ) : (
                 <DesktopDemoBody
                     matrix={matrix}
+                    minMinutes={minMinutes}
                     maxMinutes={maxMinutes}
                     bestPerDay={bestPerDay}
                     cursor={cursor}
@@ -300,6 +317,7 @@ export function DemoHeatmap() {
 
 type BodyProps = {
     matrix: number[][];
+    minMinutes: number;
     maxMinutes: number;
     bestPerDay: Best[];
     cursor: number;
@@ -313,6 +331,7 @@ type BodyProps = {
  */
 function DesktopDemoBody({
     matrix,
+    minMinutes,
     maxMinutes,
     bestPerDay,
     cursor,
@@ -493,7 +512,11 @@ function DesktopDemoBody({
                                             height: CELL_H,
                                             mr: `${CELL_GAP}px`,
                                             borderRadius: "2px",
-                                            background: colorFor(v, maxMinutes),
+                                            background: colorFor(
+                                                v,
+                                                minMinutes,
+                                                maxMinutes,
+                                            ),
                                             opacity: dim,
                                             transition:
                                                 "opacity 260ms ease, outline 260ms ease, transform 260ms ease, box-shadow 260ms ease",
@@ -537,6 +560,7 @@ const MOBILE_PREVIEW_SLOT_STRIDE = 8; // every 2 hours (8 × 15min)
 
 function MobileDemoBody({
     matrix,
+    minMinutes,
     maxMinutes,
     bestPerDay,
     cursor,
@@ -683,6 +707,7 @@ function MobileDemoBody({
                                                             borderRadius: 1,
                                                             background: colorFor(
                                                                 v,
+                                                                minMinutes,
                                                                 maxMinutes,
                                                             ),
                                                             color: "rgba(0,0,0,0.85)",

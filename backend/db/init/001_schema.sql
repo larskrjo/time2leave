@@ -51,6 +51,29 @@ CREATE TABLE IF NOT EXISTS trips (
         REFERENCES `users` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
+-- Per-user audit log of "billed" trip mutations: trip creates and trip
+-- patches that change addresses (or swap them). Each of those operations
+-- triggers a Routes Matrix backfill, which costs real money.
+--
+-- Used to enforce a rolling-7-day mutation cap per user (see
+-- `Settings.max_trip_mutations_per_week`) so a single user can't drain
+-- the Google Maps budget by edit-spamming. Name-only patches and
+-- deletes are NOT logged here because they don't call Google.
+--
+-- We keep `trip_id` even after a trip is deleted (no FK + ON DELETE
+-- CASCADE) so the audit history survives churn. NULL is not used.
+CREATE TABLE IF NOT EXISTS trip_mutation_log (
+    `id`         int         NOT NULL AUTO_INCREMENT,
+    `user_id`    int         NOT NULL,
+    `trip_id`    int         NOT NULL,
+    `kind`       varchar(32) NOT NULL,
+    `created_at` timestamp   NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (`id`),
+    KEY `idx_mutations_user_time` (`user_id`, `created_at`),
+    CONSTRAINT `fk_mutations_user` FOREIGN KEY (`user_id`)
+        REFERENCES `users` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
 CREATE TABLE IF NOT EXISTS commute_samples (
     `id`                     int           NOT NULL AUTO_INCREMENT,
     `trip_id`                int           NOT NULL,

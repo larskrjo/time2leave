@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta
+from typing import Any
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -14,17 +15,18 @@ from app.services.trips import Trip
 TZ = ZoneInfo("America/Los_Angeles")
 
 
-def _settings(**overrides) -> Settings:
-    return Settings(
-        app_env="local",
-        commute_window_start_hour=6,
-        commute_window_end_hour=21,
-        commute_interval_minutes=15,
-        commute_days_per_week=7,
-        commute_throttle_every=0,
-        max_weekly_routes_calls=overrides.pop("max_weekly_routes_calls", 10_000),
-        **overrides,
-    )
+def _settings(**overrides: Any) -> Settings:
+    defaults: dict[str, Any] = {
+        "app_env": "local",
+        "commute_window_start_hour": 6,
+        "commute_window_end_hour": 21,
+        "commute_interval_minutes": 15,
+        "commute_days_per_week": 7,
+        "commute_throttle_every": 0,
+        "max_weekly_routes_calls": 10_000,
+    }
+    defaults.update(overrides)
+    return Settings(**defaults)
 
 
 def test_next_week_monday_skips_to_next_week() -> None:
@@ -209,6 +211,174 @@ def test_plan_and_run_enforces_ceiling(
     assert any(
         "exceeds MAX_WEEKLY_ROUTES_CALLS" in rec.message for rec in caplog.records
     )
+
+
+class TestFillInSlotsAbortsOnSoftDelete:
+    """Mid-loop `_trip_is_soft_deleted` flip stops further provider calls.
+
+    The check piggy-backs on the throttle boundary, so with
+    `commute_throttle_every=N` the loop runs N slots and *then* notices
+    the soft-delete on the post-batch check, exiting the loop. We
+    deliberately don't check more often than that to avoid an extra DB
+    round-trip per slot.
+    """
+
+    @staticmethod
+    def _trip() -> Trip:
+        return Trip(
+            id=42,
+            user_id=1,
+            name="T",
+            origin_address="A",
+            destination_address="B",
+            created_at=None,
+        )
+
+    @staticmethod
+    def _pending(n: int) -> list[dict]:
+        # Use future timestamps so `_query_departure_time` is a no-op
+        # and we don't depend on wall-clock for the test.
+        base = datetime.now(TZ) + timedelta(days=14)
+        return [
+            {
+                "id": i + 1,
+                "trip_id": 42,
+                "direction": "outbound",
+                "departure_time_rfc3339": (
+                    base + timedelta(minutes=15 * i)
+                ).isoformat(),
+            }
+            for i in range(n)
+        ]
+
+    @staticmethod
+    def _fake_db_factory():
+        class _Cursor:
+            def __init__(self) -> None:
+                self.executes: list = []
+                self.rowcount = 1
+
+            def execute(self, query, values=None) -> None:
+                self.executes.append((query, values))
+
+        cursor = _Cursor()
+
+        class _DB:
+            def __enter__(self_inner):
+                return cursor
+
+            def __exit__(self_inner, *exc) -> None:
+                return None
+
+        return _DB, cursor
+
+    def test_loop_breaks_at_throttle_boundary_when_soft_deleted(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        settings = _settings(commute_throttle_every=3, commute_throttle_seconds=0)
+
+        # 10 pending slots: with throttle_every=3, the loop processes
+        # slots 1-3, hits the boundary, sees the soft-delete, breaks.
+        pending = self._pending(10)
+        monkeypatch.setattr(dg, "_fetch_pending_slots", lambda *_a, **_kw: pending)
+
+        db_cls, _cursor = self._fake_db_factory()
+        monkeypatch.setattr(dg, "Database", db_cls)
+
+        # Soft-delete is True from the very first check.
+        delete_check_calls: list[int] = []
+
+        def fake_check(trip_id: int) -> bool:
+            delete_check_calls.append(trip_id)
+            return True
+
+        monkeypatch.setattr(dg, "_trip_is_soft_deleted", fake_check)
+
+        # Sleep should never be reached: the abort runs before sleep.
+        monkeypatch.setattr(
+            dg.time,
+            "sleep",
+            lambda *_a, **_kw: pytest.fail("sleep called after abort"),
+        )
+
+        provider_calls: list[tuple] = []
+
+        class FakeProvider:
+            def fetch(self, *args, **kwargs):  # noqa: ARG002
+                provider_calls.append(args)
+                return type(
+                    "R",
+                    (),
+                    {
+                        "distance_meters": 100,
+                        "duration": "60s",
+                        "condition": "OK",
+                        "status_code": "OK",
+                        "status_message": None,
+                    },
+                )()
+
+        result = dg._fill_in_slots_for_trip(
+            trip=self._trip(),
+            week_start=date(2025, 11, 10),
+            provider=FakeProvider(),
+            settings=settings,
+        )
+
+        # Exactly one throttle-batch worth of provider calls — no more.
+        assert len(provider_calls) == 3
+        # The soft-delete check fires at the boundary.
+        assert delete_check_calls == [42]
+        assert result == {"updated": 3, "errors": 0}
+
+    def test_loop_continues_when_not_soft_deleted(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Negative control: an active trip runs to completion."""
+        settings = _settings(commute_throttle_every=3, commute_throttle_seconds=0)
+        pending = self._pending(5)
+        monkeypatch.setattr(dg, "_fetch_pending_slots", lambda *_a, **_kw: pending)
+
+        db_cls, _cursor = self._fake_db_factory()
+        monkeypatch.setattr(dg, "Database", db_cls)
+
+        check_count = 0
+
+        def fake_check(trip_id: int) -> bool:
+            nonlocal check_count
+            check_count += 1
+            return False
+
+        monkeypatch.setattr(dg, "_trip_is_soft_deleted", fake_check)
+        monkeypatch.setattr(dg.time, "sleep", lambda *_a, **_kw: None)
+
+        provider_calls: list[int] = []
+
+        class FakeProvider:
+            def fetch(self, *_args, **_kwargs):
+                provider_calls.append(1)
+                return type(
+                    "R",
+                    (),
+                    {
+                        "distance_meters": 100,
+                        "duration": "60s",
+                        "condition": "OK",
+                        "status_code": "OK",
+                        "status_message": None,
+                    },
+                )()
+
+        result = dg._fill_in_slots_for_trip(
+            trip=self._trip(),
+            week_start=date(2025, 11, 10),
+            provider=FakeProvider(),
+            settings=settings,
+        )
+
+        assert len(provider_calls) == 5  # all slots processed
+        assert check_count == 1  # one boundary at idx=2 (slots 1-3)
+        assert result == {"updated": 5, "errors": 0}
 
 
 def test_plan_and_run_bypasses_ceiling_for_backfill(

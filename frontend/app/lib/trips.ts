@@ -68,7 +68,25 @@ export async function deleteTrip(id: number | string): Promise<void> {
     await apiFetch<null>(API.trip(id), { method: "DELETE" });
 }
 
-export type TripQuota = { used: number; limit: number };
+/**
+ * Combined trip quota: how many *slots* (saved trips) a user has used,
+ * plus their rolling-7-day "billed mutation" budget. A "billed mutation"
+ * is anything that triggers a fresh Routes Matrix backfill — trip create
+ * and any trip patch that changes the origin/destination addresses (or
+ * swaps them). Name-only patches and deletes are free and not counted.
+ *
+ * `mutations_oldest_age_seconds` is the age (in seconds) of the user's
+ * oldest in-window mutation, or `null` when they have zero usage. Used
+ * by the UI to render a "your next slot opens in N hours" hint when
+ * the user is at the cap.
+ */
+export type TripQuota = {
+    used: number;
+    limit: number;
+    mutations_used: number;
+    mutations_limit: number;
+    mutations_oldest_age_seconds: number | null;
+};
 
 export async function getTripQuota(): Promise<TripQuota> {
     return apiFetch<TripQuota>(API.tripQuota);

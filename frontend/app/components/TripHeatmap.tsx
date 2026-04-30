@@ -68,13 +68,34 @@ const WEEKDAY_LONG: Record<Weekday, string> = {
     Sun: "Sunday",
 };
 
-function colorFor(minutes: number, maxMinutes: number): string {
+function colorFor(
+    minutes: number,
+    minMinutes: number,
+    maxMinutes: number,
+): string {
+    // Empty grid (no samples yet): return a soft neutral.
     if (maxMinutes <= 0) return "hsl(200 20% 92%)";
-    const t = Math.min(1, minutes / maxMinutes);
-    // Soft green → warm amber → red.
-    const hue = 138 - t * 138;
-    const sat = 68;
-    const light = 52 + (1 - t) * 18;
+    // Degenerate week with zero variance (all sampled cells equal):
+    // pick the midpoint amber so the cell still has a confident color.
+    if (maxMinutes === minMinutes) return "hsl(60 70% 60%)";
+    // Min-max normalize so the *fastest* slot maps to t=0 (full green)
+    // and the *slowest* to t=1 (full red). Without this, a typical
+    // commute (best slot ~60% of worst) would never reach the green
+    // end of the spectrum and the whole heatmap would sit in the
+    // yellow→red band, which is what users perceived before this
+    // change.
+    const t = Math.min(
+        1,
+        Math.max(0, (minutes - minMinutes) / (maxMinutes - minMinutes)),
+    );
+    // Linear hue sweep green (120) → yellow (60) → red (0). Midpoint
+    // (t = 0.5) lands exactly on pure yellow, so "yellow == middle of
+    // the week's commute spread" is intuitively true.
+    const hue = 120 - t * 120;
+    const sat = 70;
+    // Slightly lighter at the green end so the bad (red) cells visually
+    // punch through and the heatmap reads "where to avoid" at a glance.
+    const light = 52 + (1 - t) * 14;
     return `hsl(${hue} ${sat}% ${light}%)`;
 }
 
@@ -137,16 +158,23 @@ export function TripHeatmap({
     const weekdays: Weekday[] = heatmap.weekdays ?? WEEKDAYS;
     const directionPayload = heatmap[direction] ?? {};
 
-    const maxMinutes = useMemo(() => {
+    const { minMinutes, maxMinutes } = useMemo(() => {
+        let min = Number.POSITIVE_INFINITY;
         let max = 0;
         for (const day of weekdays) {
             const row = directionPayload[day] ?? {};
             for (const slot of slots) {
                 const v = row[slot];
-                if (typeof v === "number" && v > max) max = v;
+                if (typeof v === "number") {
+                    if (v > max) max = v;
+                    if (v < min) min = v;
+                }
             }
         }
-        return max;
+        return {
+            minMinutes: Number.isFinite(min) ? min : 0,
+            maxMinutes: max,
+        };
     }, [weekdays, slots, directionPayload]);
 
     const [now, setNow] = useState<{ day: Weekday; slot: string } | null>(() =>
@@ -166,7 +194,7 @@ export function TripHeatmap({
 
     function cellColor(day: Weekday, slot: string): string {
         const v = directionPayload[day]?.[slot];
-        if (typeof v === "number") return colorFor(v, maxMinutes);
+        if (typeof v === "number") return colorFor(v, minMinutes, maxMinutes);
         return "transparent";
     }
 
@@ -185,6 +213,7 @@ export function TripHeatmap({
                 heatmap={heatmap}
                 direction={direction}
                 highlight={highlight ?? null}
+                minMinutes={minMinutes}
                 maxMinutes={maxMinutes}
                 now={now}
                 weekdays={weekdays}
@@ -414,6 +443,7 @@ function MobileAccordionHeatmap({
     heatmap,
     direction,
     highlight,
+    minMinutes,
     maxMinutes,
     now,
     weekdays,
@@ -421,6 +451,7 @@ function MobileAccordionHeatmap({
     heatmap: HeatmapPayload;
     direction: Direction;
     highlight: HeatmapHighlight;
+    minMinutes: number;
     maxMinutes: number;
     now: { day: Weekday; slot: string } | null;
     weekdays: Weekday[];
@@ -544,6 +575,7 @@ function MobileAccordionHeatmap({
                                                 background: hasData
                                                     ? colorFor(
                                                           v as number,
+                                                          minMinutes,
                                                           maxMinutes,
                                                       )
                                                     : `repeating-linear-gradient(
