@@ -28,7 +28,7 @@ import {
 import { AppShell } from "~/components/AppShell";
 import { PlacesAutocompleteField } from "~/components/PlacesAutocompleteField";
 import { ProtectedRoute } from "~/components/ProtectedRoute";
-import { FadeIn, PageHero, glassCardSx } from "~/components/motion";
+import { FadeIn, PageHero, glassCardSx, primaryCtaSx } from "~/components/motion";
 import { ROUTES } from "~/constants/path";
 import { createTrip } from "~/lib/trips";
 import { isApiError } from "~/lib/api";
@@ -172,22 +172,7 @@ function NewTripForm() {
                                     variant="contained"
                                     disabled={disabled}
                                     startIcon={<RouteRounded />}
-                                    sx={{
-                                        borderRadius: 2,
-                                        px: 3,
-                                        fontWeight: 700,
-                                        background: disabled
-                                            ? undefined
-                                            : "linear-gradient(135deg, #1e40af 0%, #ef6c00 100%)",
-                                        boxShadow: disabled
-                                            ? undefined
-                                            : "0 10px 24px -12px rgba(30,64,175,0.55)",
-                                        "&:hover": {
-                                            background: disabled
-                                                ? undefined
-                                                : "linear-gradient(135deg, #1a3aa0 0%, #d65f00 100%)",
-                                        },
-                                    }}
+                                    sx={primaryCtaSx}
                                 >
                                     {pending ? "Creating…" : "Create trip"}
                                 </Button>

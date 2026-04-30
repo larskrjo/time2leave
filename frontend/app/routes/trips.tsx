@@ -36,7 +36,7 @@ import {
 import { AppShell } from "~/components/AppShell";
 import { ProtectedRoute } from "~/components/ProtectedRoute";
 import { TripCard } from "~/components/TripCard";
-import { FadeIn, PageHero, glassCardSx } from "~/components/motion";
+import { FadeIn, PageHero, glassCardSx, primaryCtaSx } from "~/components/motion";
 import { ROUTES } from "~/constants/path";
 import {
     deleteTrip,
@@ -239,7 +239,6 @@ function TripsListInner() {
 
     const quotaBadge = quota && (
         <Chip
-            size="small"
             variant={atLimit ? "filled" : "outlined"}
             color={atLimit ? "warning" : "default"}
             label={`${(trips?.length ?? quota.used)} / ${quota.limit} slots`}
@@ -247,6 +246,8 @@ function TripsListInner() {
                 fontWeight: 700,
                 letterSpacing: 0.3,
                 borderRadius: 1.5,
+                height: 36,
+                px: 0.5,
                 backdropFilter: "blur(6px)",
             }}
         />
@@ -263,25 +264,11 @@ function TripsListInner() {
             <span>
                 <Button
                     variant="contained"
-                    size="large"
                     startIcon={<AddRounded />}
                     component={RouterLink}
                     to={ROUTES.newTrip}
                     disabled={Boolean(atLimit)}
-                    sx={{
-                        borderRadius: 2,
-                        px: 2.5,
-                        py: 1.1,
-                        fontWeight: 700,
-                        boxShadow: "0 10px 24px -12px rgba(30,64,175,0.55)",
-                        background:
-                            "linear-gradient(135deg, #1e40af 0%, #ef6c00 100%)",
-                        "&:hover": {
-                            background:
-                                "linear-gradient(135deg, #1a3aa0 0%, #d65f00 100%)",
-                            boxShadow: "0 14px 28px -14px rgba(30,64,175,0.65)",
-                        },
-                    }}
+                    sx={primaryCtaSx}
                 >
                     New trip
                 </Button>
@@ -361,12 +348,7 @@ function TripsListInner() {
                             startIcon={<AddRounded />}
                             component={RouterLink}
                             to={ROUTES.newTrip}
-                            sx={{
-                                borderRadius: 2,
-                                fontWeight: 700,
-                                background:
-                                    "linear-gradient(135deg, #1e40af 0%, #ef6c00 100%)",
-                            }}
+                            sx={primaryCtaSx}
                         >
                             Add your first trip
                         </Button>

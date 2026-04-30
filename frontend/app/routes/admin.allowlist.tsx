@@ -35,7 +35,7 @@ import {
 
 import { AdminRoute } from "~/components/AdminRoute";
 import { AppShell } from "~/components/AppShell";
-import { FadeIn, PageHero, glassCardSx } from "~/components/motion";
+import { FadeIn, PageHero, glassCardSx, primaryCtaSx } from "~/components/motion";
 import {
     addAllowlistEntry,
     listAllowlist,
@@ -258,7 +258,7 @@ function AllowlistInner() {
                         <Stack
                             direction={{ xs: "column", sm: "row" }}
                             spacing={1.5}
-                            alignItems={{ sm: "flex-end" }}
+                            alignItems="stretch"
                         >
                             <TextField
                                 fullWidth
@@ -282,21 +282,16 @@ function AllowlistInner() {
                             <Button
                                 type="submit"
                                 variant="contained"
-                                size="large"
                                 startIcon={<PersonAddRounded />}
                                 disabled={adding || draft.trim().length === 0}
                                 sx={{
-                                    borderRadius: 2,
-                                    px: 2.5,
-                                    py: 1.1,
-                                    fontWeight: 700,
+                                    ...primaryCtaSx,
                                     whiteSpace: "nowrap",
-                                    background:
-                                        "linear-gradient(135deg, #1e40af 0%, #ef6c00 100%)",
-                                    "&:hover": {
-                                        background:
-                                            "linear-gradient(135deg, #1a3aa0 0%, #d65f00 100%)",
-                                    },
+                                    minWidth: { sm: 200 },
+                                    // Pin to the outlined-TextField height so
+                                    // the field + button share a baseline in
+                                    // the row layout.
+                                    height: { sm: 56 },
                                 }}
                             >
                                 Add to allowlist

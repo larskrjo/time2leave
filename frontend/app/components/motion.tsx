@@ -259,3 +259,46 @@ export const glassCardSx = {
         boxShadow: "0 10px 30px -18px rgba(0,0,0,0.6)",
     },
 } as const;
+
+/**
+ * The single source of truth for the app's primary CTA — the gradient
+ * pill used on /trips ("New trip", "Add your first trip"), /trips/new
+ * ("Save"), and /admin/allowlist ("Add to allowlist").
+ *
+ * Centralising the styling keeps every primary action the same shape,
+ * height, and hover/disabled behaviour across pages. Per-call-site sx
+ * overrides still merge in the usual way (e.g. the admin form pins
+ * `height: 56` to align with its outlined TextField).
+ *
+ * Height is intentional: ~44px so it pairs nicely with both the
+ * stat chips ("0 / 3 slots") and the outlined inputs without feeling
+ * chunky.
+ */
+export const primaryCtaSx = {
+    borderRadius: 2,
+    px: 2.75,
+    py: 1.15,
+    fontWeight: 700,
+    letterSpacing: 0.3,
+    color: "common.white",
+    background: "linear-gradient(135deg, #1e40af 0%, #ef6c00 100%)",
+    boxShadow: "0 10px 24px -12px rgba(30,64,175,0.55)",
+    transition:
+        "transform 160ms ease, box-shadow 200ms ease, background 200ms ease",
+    "&:hover": {
+        background: "linear-gradient(135deg, #1a3aa0 0%, #d65f00 100%)",
+        boxShadow: "0 14px 28px -14px rgba(30,64,175,0.65)",
+        transform: "translateY(-1px)",
+    },
+    "&:active": {
+        transform: "translateY(0)",
+    },
+    // MUI's default disabled treatment doesn't override our gradient
+    // background, so we reset it explicitly to a flat neutral.
+    "&.Mui-disabled": {
+        background: "rgba(99,102,124,0.18)",
+        color: "rgba(99,102,124,0.55)",
+        boxShadow: "none",
+        transform: "none",
+    },
+} as const;
