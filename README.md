@@ -271,19 +271,27 @@ Builds the SPA, syncs `build/client/` to `s3://traffic-larsjohansen-frontend`
 (immutable cache for assets, `no-cache` for `index.html`), and invalidates
 CloudFront. The script waits until the invalidation completes.
 
-#### CloudFront response headers (one-time)
+#### CloudFront one-time setup
 
-`frontend/scripts/configure-cloudfront-headers.sh` attaches a Response
-Headers Policy to the distribution that sets standard SPA hardening
-headers (HSTS, nosniff, frame-options, referrer-policy) and — most
-importantly — `Cross-Origin-Opener-Policy: same-origin-allow-popups`,
-which Google Sign-In needs for the popup `postMessage` callback to work
-without a console warning. Run once after the distribution is created,
-or after recreating it. Idempotent: re-running just confirms the
-existing policy is current.
+`frontend/scripts/configure-cloudfront.sh` configures two distribution-
+level things that aren't part of the per-deploy artifact pipe:
+
+  1. **Response Headers Policy** — attaches standard SPA hardening
+     headers (HSTS, nosniff, frame-options, referrer-policy) plus
+     `Cross-Origin-Opener-Policy: same-origin-allow-popups`, which
+     Google Sign-In needs for its popup `postMessage` callback.
+
+  2. **CustomErrorResponses for SPA routing** — rewrites S3's `403`
+     and `404` to `/index.html` with HTTP `200`, so deep links like
+     `/trips` or `/trips/42` are handed to the React Router SPA
+     instead of returning a static "not found" from S3.
+
+Run once after the distribution is created, after recreating it, or
+when changing any of these settings. Idempotent: re-runs only update
+what drifted.
 
 ```bash
-./frontend/scripts/configure-cloudfront-headers.sh
+./frontend/scripts/configure-cloudfront.sh
 ```
 
 ### CI
