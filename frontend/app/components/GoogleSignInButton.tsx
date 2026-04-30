@@ -19,6 +19,16 @@ declare global {
                         client_id: string;
                         callback: (resp: { credential?: string }) => void;
                         auto_select?: boolean;
+                        // Opt into the new browser FedCM API for both
+                        // the One Tap prompt and the rendered button.
+                        // Without this, GSI falls back to the legacy
+                        // popup + window.postMessage flow, which trips
+                        // Chrome's COOP heads-up warning even when the
+                        // page sets COOP=same-origin-allow-popups
+                        // (because Chrome warns about future-blocking
+                        // behavior, not current behavior).
+                        use_fedcm_for_prompt?: boolean;
+                        use_fedcm_for_button?: boolean;
                     }) => void;
                     renderButton: (
                         parent: HTMLElement,
@@ -43,6 +53,19 @@ declare global {
 }
 
 const GSI_SCRIPT_SRC = "https://accounts.google.com/gsi/client";
+
+// GSI is *global* state — `google.accounts.id.initialize` registers a
+// single callback for the whole page. Calling it more than once warns
+// ("only the last initialized instance will be used") and that warning
+// compounds on every logout→splash remount of this component.
+//
+// Solution: initialize exactly once per page lifecycle with a stable
+// callback that delegates to a module-level handler reference. Each
+// time the component (re)mounts it just swaps the handler — no new
+// initialize call needed. On unmount the handler is cleared so any
+// stale popup callbacks fired after navigation become no-ops.
+let gsiInitializedClientId: string | null = null;
+let credentialHandler: ((credential: string) => void) | null = null;
 
 function loadGsiScript(): Promise<void> {
     if (typeof window === "undefined") return Promise.resolve();
@@ -137,29 +160,57 @@ export function GoogleSignInButton() {
             const host = containerRef.current;
             if (!gsi || !host) return;
 
-            gsi.initialize({
-                client_id: clientId,
-                callback: (resp) => {
-                    if (!resp.credential) {
+            // Wire up the handler that the (stable, single) GSI
+            // callback delegates to. Each remount installs a fresh
+            // closure over the *current* component's setError /
+            // setPending and the latest loginWithGoogleCredential.
+            credentialHandler = (credential) => {
+                setPending(true);
+                setError(null);
+                void loginWithGoogleCredential(credential)
+                    .catch((err) => {
                         setError(
-                            "Google returned an empty credential. Try again.",
+                            err?.detail ??
+                                err?.message ??
+                                "Sign-in failed. Your email may not be on the allowlist.",
                         );
-                        return;
-                    }
-                    setPending(true);
-                    setError(null);
-                    void loginWithGoogleCredential(resp.credential)
-                        .catch((err) => {
+                    })
+                    .finally(() => setPending(false));
+            };
+
+            // Initialize GSI exactly once per page lifecycle. Re-init
+            // only if the client_id actually changed (config swap), in
+            // which case the warning is acceptable since the previous
+            // init's callback is genuinely stale.
+            if (gsiInitializedClientId !== clientId) {
+                gsi.initialize({
+                    client_id: clientId,
+                    callback: (resp) => {
+                        if (!resp.credential) {
                             setError(
-                                err?.detail ??
-                                    err?.message ??
-                                    "Sign-in failed. Your email may not be on the allowlist.",
+                                "Google returned an empty credential. Try again.",
                             );
-                        })
-                        .finally(() => setPending(false));
-                },
-                auto_select: false,
-            });
+                            return;
+                        }
+                        // Delegate to whichever component instance is
+                        // currently mounted — or no-op if we've since
+                        // unmounted (e.g. a stale popup credential
+                        // arrives after navigation).
+                        credentialHandler?.(resp.credential);
+                    },
+                    auto_select: false,
+                    // Use FedCM (the new browser-native federated-identity
+                    // API) instead of the legacy popup + postMessage flow.
+                    // This is what silences the residual COOP warning even
+                    // when the page already sets same-origin-allow-popups,
+                    // and is the path Google is migrating all hosts to.
+                    // Older browsers without FedCM gracefully fall back to
+                    // the popup flow on their own.
+                    use_fedcm_for_prompt: true,
+                    use_fedcm_for_button: true,
+                });
+                gsiInitializedClientId = clientId;
+            }
 
             renderButton(gsi, host);
 
@@ -179,6 +230,10 @@ export function GoogleSignInButton() {
         return () => {
             cancelled = true;
             resizeObserver?.disconnect();
+            // Drop the closure so a credential that arrives after we've
+            // unmounted (e.g. user closed the tab the popup landed in)
+            // doesn't try to call setState on a dead component.
+            credentialHandler = null;
         };
     }, [authConfig?.google_oauth_client_id, loginWithGoogleCredential]);
 

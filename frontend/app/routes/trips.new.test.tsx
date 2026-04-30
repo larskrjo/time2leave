@@ -78,7 +78,7 @@ describe("/trips/new route", () => {
         server.use(
             http.post("*/api/v1/trips", () =>
                 HttpResponse.json(
-                    { detail: "Per-user trip cap of 3 reached" },
+                    { detail: "Per-user trip cap of 1 reached" },
                     { status: 409 },
                 ),
             ),
@@ -103,7 +103,7 @@ describe("/trips/new route", () => {
         fireEvent.click(screen.getByRole("button", { name: /Create trip/i }));
 
         expect(
-            await screen.findByText(/Per-user trip cap of 3 reached/i),
+            await screen.findByText(/Per-user trip cap of \d+ reached/i),
         ).toBeInTheDocument();
     });
 

@@ -59,8 +59,8 @@ class Settings(BaseSettings):
     )
 
     # Per-user and global trip quotas.
-    max_trips_per_user: int = 3
-    max_trips_total: int = 150
+    max_trips_per_user: int = 1
+    max_trips_total: int = 10
     # Per-user rolling-7-day cap on "billed" trip mutations: trip creates
     # and trip patches that change addresses (or swap them). Each of those
     # operations triggers a Routes Matrix backfill (~840 calls / trip /
@@ -69,7 +69,7 @@ class Settings(BaseSettings):
     # `trip_mutation_log`; surfaced in /api/v1/trips/quota; enforced
     # before Geocoding so we don't even pay for the pre-flight when a
     # user is over budget.
-    max_trip_mutations_per_week: int = 3
+    max_trip_mutations_per_week: int = 1
     # Fail-closed ceiling on Routes Matrix calls the Friday job may make.
     max_weekly_routes_calls: int = 150_000
 

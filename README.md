@@ -76,8 +76,9 @@ Run `make help` for the full target list (`test`, `typecheck`, `logs`,
 
 | Knob | Default | Purpose |
 | --- | --- | --- |
-| `MAX_TRIPS_PER_USER` | 3 | Hard cap on active trips per user. |
-| `MAX_TRIPS_TOTAL` | 150 | Global hard cap. New trips return 409 once reached. |
+| `MAX_TRIPS_PER_USER` | 1 | Hard cap on active trips per user. |
+| `MAX_TRIPS_TOTAL` | 10 | Global hard cap. New trips return 409 once reached. |
+| `MAX_TRIP_MUTATIONS_PER_WEEK` | 1 | Per-user rolling-7-day cap on trip creates + address-changing patches (each one fires a fresh Routes Matrix backfill ≈ $8.40). Returns 429 when exceeded. |
 | `MAX_WEEKLY_ROUTES_CALLS` | 150 000 | Friday cron aborts before any call if it would exceed this. |
 | Slots per trip per week | 60 × 15 × 7 × 2 = 12 600 | (60 quarter-hours of 06:00-21:00) × 7 days × 2 directions. |
 
@@ -116,7 +117,7 @@ All values have sensible local defaults (see [`backend/.env.example`](backend/.e
 | `ENABLE_DEV_LOGIN` | `true` | `POST /auth/dev-login` is mounted only when this is true. Forced off in prod. |
 | `ADMIN_EMAILS` | _empty_ | Comma-separated. These users get `is_admin: true` and admin endpoints. |
 | `AUTH_ALLOWLIST_BOOTSTRAP` | _empty_ | Comma-separated. Inserted into `auth_allowlist` on every startup (idempotent). |
-| `MAX_TRIPS_PER_USER` / `MAX_TRIPS_TOTAL` / `MAX_WEEKLY_ROUTES_CALLS` | `3` / `150` / `150000` | Quota / cost guardrails. |
+| `MAX_TRIPS_PER_USER` / `MAX_TRIPS_TOTAL` / `MAX_TRIP_MUTATIONS_PER_WEEK` / `MAX_WEEKLY_ROUTES_CALLS` | `1` / `10` / `1` / `150000` | Quota / cost guardrails. |
 | `ALLOWED_ORIGINS` | `http://localhost:5173, http://127.0.0.1:5173, http://traffic.larsjohansen.com:5173` | Comma-separated CORS origins (outside prod). Prod always allows exactly `https://traffic.larsjohansen.com`. |
 | `MYSQL_HOST_PORT` / `API_HOST_PORT` / `FRONTEND_HOST_PORT` | `3307` / `8000` / `5173` | Host-side ports published by `docker-compose.dev.yml`. MySQL defaults to `3307` so it doesn't clash with a Homebrew/system MySQL on `3306`. Override if any of these are taken on your machine. |
 

@@ -252,8 +252,14 @@ def test_create_trip_enforces_per_user_cap(
     fake_trips_store: dict[int, Trip],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # Pre-fill up to 3 trips.
-    for i in range(3):
+    # Pre-fill exactly the configured per-user limit so adding one more
+    # is the *first* request to breach the cap. Reads the limit from
+    # settings instead of hard-coding it so this test stays correct
+    # whether the default is 1, 3, or anything else.
+    from app.config import get_settings
+
+    limit = get_settings().max_trips_per_user
+    for i in range(limit):
         fake_trips_store[i + 1] = Trip(
             id=i + 1,
             user_id=99,
@@ -557,13 +563,16 @@ def test_quota_endpoint_includes_mutation_counters(
     patched_app: TestClient,
 ) -> None:
     """The /quota endpoint should expose the rolling mutation budget."""
+    from app.config import get_settings
+
+    settings = get_settings()
     r = patched_app.get("/api/v1/trips/quota")
     assert r.status_code == 200
     body = r.json()
     assert body["used"] == 0
-    assert body["limit"] == 3
+    assert body["limit"] == settings.max_trips_per_user
     assert body["mutations_used"] == 0
-    assert body["mutations_limit"] == 3
+    assert body["mutations_limit"] == settings.max_trip_mutations_per_week
     assert body["mutations_oldest_age_seconds"] is None
 
 
