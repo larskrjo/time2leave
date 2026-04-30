@@ -17,6 +17,24 @@ What runs when a user creates a trip (`backfill_trip_current_week`):
     Same as above but for exactly one trip and the *current* week, so
     the heatmap starts populating right away instead of waiting until
     Friday.
+
+Past-slot handling:
+
+    Routes Matrix rejects `departureTime` values in the past, so when
+    we backfill the current week mid-week, the already-elapsed slots
+    (e.g. Monday morning when a trip is created Thursday) would all
+    fail with INVALID_ARGUMENT and stay grey on the heatmap. To avoid
+    that, when we *call* the provider for a row whose stored
+    `departure_time_rfc3339` is in the past, we shift the timestamp
+    forward by N*7 days into the future before sending it. Same
+    weekday + same hh:mm gives the same week-cyclical traffic
+    prediction, which is the right value for the heatmap cell.
+
+    The DB still stores the original slot timestamp (so the unique
+    key `(trip_id, direction, departure_time_rfc3339)` keeps its
+    natural meaning and the Friday cron's next-week run doesn't
+    collide with a backfill that already touched those future
+    timestamps).
 """
 
 from __future__ import annotations
@@ -51,6 +69,33 @@ def next_week_monday(today: date | None = None) -> date:
 def current_week_monday(today: date | None = None) -> date:
     today = today or datetime.now(TZ).date()
     return _monday_of_week(today)
+
+
+# Buffer to cover request-side latency: a slot that's "now + 30 seconds"
+# can still land at Google as a past departureTime once the request
+# has hopped through our network and theirs. Two minutes is generous
+# without being wasteful.
+_FUTURE_BUFFER = timedelta(minutes=2)
+
+
+def _query_departure_time(
+    slot_ts: datetime, now: datetime | None = None
+) -> datetime:
+    """Shift a past slot timestamp forward by week multiples until it's safe to send.
+
+    Routes Matrix requires `departureTime` to be in the future. For
+    a past slot (typical when a user creates a trip mid-week and we
+    backfill from this week's Monday), we add the smallest N*7 days
+    that lands the timestamp comfortably past `now`. Because traffic
+    patterns are weekly-cyclical, querying e.g. next Monday at 8am
+    is the right prediction for "this Monday at 8am" on the heatmap.
+    """
+    now = now or datetime.now(slot_ts.tzinfo)
+    cutoff = now + _FUTURE_BUFFER
+    shifted = slot_ts
+    while shifted <= cutoff:
+        shifted += timedelta(days=7)
+    return shifted
 
 
 def _slots_for_day(day: date, settings: Settings) -> list[datetime]:
@@ -198,9 +243,11 @@ def _fill_in_slots_for_trip(
         for idx, row in enumerate(pending):
             direction: Direction = row["direction"]
             origin, destination = _origin_destination(trip, direction)
+            slot_ts = datetime.fromisoformat(row["departure_time_rfc3339"])
+            query_ts = _query_departure_time(slot_ts)
             try:
                 result = provider.fetch(
-                    origin, destination, row["departure_time_rfc3339"], direction
+                    origin, destination, query_ts.isoformat(), direction
                 )
             except Exception:
                 logger.exception(

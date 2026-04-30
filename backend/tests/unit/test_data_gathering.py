@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -55,6 +55,70 @@ def test_slots_for_day_is_start_inclusive_end_exclusive() -> None:
     assert slots[0] == datetime(2025, 11, 10, 6, 0, tzinfo=TZ)
     assert slots[-1] == datetime(2025, 11, 10, 20, 45, tzinfo=TZ)
     assert len(slots) == 60
+
+
+class TestQueryDepartureTime:
+    """`_query_departure_time` keeps future slots and shifts past ones forward.
+
+    The shift is by full week multiples so the returned timestamp is the
+    same weekday + same hh:mm as the slot, which is what gives a
+    week-cyclical traffic prediction.
+    """
+
+    def test_future_slot_is_returned_unchanged(self) -> None:
+        now = datetime(2026, 4, 30, 9, 49, tzinfo=TZ)  # Thu
+        slot = datetime(2026, 5, 2, 14, 0, tzinfo=TZ)  # Sat next week
+        assert dg._query_departure_time(slot, now=now) == slot
+
+    def test_past_slot_in_current_week_shifts_one_week(self) -> None:
+        now = datetime(2026, 4, 30, 9, 49, tzinfo=TZ)  # Thu
+        slot = datetime(2026, 4, 27, 8, 0, tzinfo=TZ)  # Mon this week
+        result = dg._query_departure_time(slot, now=now)
+        assert result == datetime(2026, 5, 4, 8, 0, tzinfo=TZ)
+        assert result.weekday() == slot.weekday()
+        assert (result.hour, result.minute) == (slot.hour, slot.minute)
+
+    def test_multi_week_stale_slot_shifts_multiple_weeks(self) -> None:
+        # Apr 16 8am (Thu) is two weeks back. Apr 30 8am (today) is
+        # also still in the past relative to `now=09:49`, so the
+        # smallest forward shift that clears the buffer is +21 days.
+        now = datetime(2026, 4, 30, 9, 49, tzinfo=TZ)
+        slot = datetime(2026, 4, 16, 8, 0, tzinfo=TZ)
+        result = dg._query_departure_time(slot, now=now)
+        assert result == datetime(2026, 5, 7, 8, 0, tzinfo=TZ)
+        assert result.weekday() == slot.weekday()
+        assert (result.hour, result.minute) == (slot.hour, slot.minute)
+
+    def test_slot_equal_to_now_is_shifted_past_buffer(self) -> None:
+        # `slot_ts == now` would otherwise sail through and Google would
+        # see a past timestamp once the request lands. The 2-minute
+        # buffer forces a forward shift.
+        now = datetime(2026, 4, 30, 9, 49, tzinfo=TZ)
+        slot = now
+        result = dg._query_departure_time(slot, now=now)
+        assert result == now + timedelta(days=7)
+
+    def test_slot_just_inside_buffer_still_shifts(self) -> None:
+        # 1 minute in the future is *inside* the 2-minute safety buffer.
+        now = datetime(2026, 4, 30, 9, 49, tzinfo=TZ)
+        slot = now + timedelta(minutes=1)
+        result = dg._query_departure_time(slot, now=now)
+        assert result > now + timedelta(minutes=2)
+
+    def test_slot_just_outside_buffer_is_unchanged(self) -> None:
+        now = datetime(2026, 4, 30, 9, 49, tzinfo=TZ)
+        slot = now + timedelta(minutes=3)
+        assert dg._query_departure_time(slot, now=now) == slot
+
+    def test_default_now_is_used_when_omitted(self) -> None:
+        # Stale slot with no explicit `now`: must come back strictly
+        # in the future of wall-clock time.
+        slot = datetime(2020, 1, 1, 8, 0, tzinfo=TZ)
+        result = dg._query_departure_time(slot)
+        assert result > datetime.now(TZ)
+        # Same weekday + hh:mm preserved across the multi-year shift.
+        assert result.weekday() == slot.weekday()
+        assert (result.hour, result.minute) == (slot.hour, slot.minute)
 
 
 def test_duration_string_parsing() -> None:
