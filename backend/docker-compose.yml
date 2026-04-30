@@ -16,6 +16,12 @@ services:
       MYSQL_HOST: "mysql"
       MYSQL_PORT: "3306"
       MYSQL_DATABASE: "time2leave"
+      # Owner / first admin. Bootstrapped onto the auth_allowlist table on
+      # every startup (idempotent INSERT IGNORE). ADMIN_EMAILS gates the
+      # /api/v1/admin/* routes; AUTH_ALLOWLIST_BOOTSTRAP makes sure the
+      # email can sign in even before the table has any other rows.
+      ADMIN_EMAILS: "larskrjo@gmail.com"
+      AUTH_ALLOWLIST_BOOTSTRAP: "larskrjo@gmail.com"
     healthcheck:
       test: ["CMD-SHELL", "python healthcheck.py"]
       interval: 5s
