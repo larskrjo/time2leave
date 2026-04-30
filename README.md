@@ -271,6 +271,21 @@ Builds the SPA, syncs `build/client/` to `s3://traffic-larsjohansen-frontend`
 (immutable cache for assets, `no-cache` for `index.html`), and invalidates
 CloudFront. The script waits until the invalidation completes.
 
+#### CloudFront response headers (one-time)
+
+`frontend/scripts/configure-cloudfront-headers.sh` attaches a Response
+Headers Policy to the distribution that sets standard SPA hardening
+headers (HSTS, nosniff, frame-options, referrer-policy) and — most
+importantly — `Cross-Origin-Opener-Policy: same-origin-allow-popups`,
+which Google Sign-In needs for the popup `postMessage` callback to work
+without a console warning. Run once after the distribution is created,
+or after recreating it. Idempotent: re-running just confirms the
+existing policy is current.
+
+```bash
+./frontend/scripts/configure-cloudfront-headers.sh
+```
+
 ### CI
 
 [`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs ruff, mypy,

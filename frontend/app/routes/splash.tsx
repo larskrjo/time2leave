@@ -6,11 +6,12 @@
  * visitors are redirected straight to /trips so this page is only
  * ever seen by newcomers.
  */
-import type { ReactNode } from "react";
+import { useRef, type ReactNode } from "react";
 import { Navigate, useSearchParams } from "react-router";
 import {
     Avatar,
     Box,
+    Button,
     Card,
     CardContent,
     Container,
@@ -20,16 +21,17 @@ import {
 } from "@mui/material";
 import {
     AccessTimeRounded,
+    LoginRounded,
     PlaceRounded,
     TuneRounded,
 } from "@mui/icons-material";
-import { motion, useReducedMotion } from "framer-motion";
+import { motion, useAnimation, useReducedMotion } from "framer-motion";
 
 import { DemoHeatmap } from "~/components/DemoHeatmap";
 import { DevLoginButton } from "~/components/DevLoginButton";
 import { GoogleSignInButton } from "~/components/GoogleSignInButton";
 import { Wordmark } from "~/components/Wordmark";
-import { glassCardSx } from "~/components/motion";
+import { glassCardSx, primaryCtaSx } from "~/components/motion";
 import { ROUTES } from "~/constants/path";
 import { useSession } from "~/lib/session";
 import Loading from "~/components/Loading";
@@ -143,6 +145,30 @@ export default function SplashPage() {
     const { status } = useSession();
     const [params] = useSearchParams();
     const next = params.get("next") ?? ROUTES.trips;
+    const reduce = useReducedMotion();
+
+    // The CTA card lives in the hero, but the user might scroll past it
+    // to read "How it works" before deciding to sign in. The top-right
+    // "Sign in" button (always visible) scrolls back to the CTA *and*
+    // briefly pulses it so the eye lands in the right place.
+    const ctaRef = useRef<HTMLDivElement | null>(null);
+    const pulseControls = useAnimation();
+
+    const scrollToSignIn = () => {
+        ctaRef.current?.scrollIntoView({
+            behavior: reduce ? "auto" : "smooth",
+            block: "center",
+        });
+        if (reduce) return;
+        void pulseControls.start({
+            boxShadow: [
+                "0 0 0 0 rgba(30,64,175,0)",
+                "0 0 0 12px rgba(30,64,175,0.28)",
+                "0 0 0 0 rgba(30,64,175,0)",
+            ],
+            transition: { duration: 1.4, ease: "easeOut" },
+        });
+    };
 
     if (status === "loading") return <Loading />;
     if (status === "authenticated") return <Navigate to={next} replace />;
@@ -165,17 +191,42 @@ export default function SplashPage() {
         >
             <AnimatedBackdrop />
 
-            {/* Brand anchor — small wordmark in the top-left so
-                visitors immediately know where they landed, without
-                competing with the hero headline for attention. */}
-            <Container maxWidth="lg" sx={{ pt: { xs: 3, md: 4 }, pb: 0 }}>
-                <Wordmark size="md" />
-            </Container>
+            {/* Brand anchor on the left, persistent "Sign in" CTA on
+                the right. The button works two ways: as a redundant
+                sign-in entry point (so users who scroll past the hero
+                still see how to get in) and as a smooth-scroll back to
+                the CTA card with a brief glow pulse to guide the eye.
 
-            {/* No theme toggle here by design: the signed-out
+                No theme toggle here by design: the signed-out
                 experience always mirrors local time (dark at night,
                 light during the day). The full three-state control
                 appears after sign-in. */}
+            <Container maxWidth="lg" sx={{ pt: { xs: 3, md: 4 }, pb: 0 }}>
+                <Stack
+                    direction="row"
+                    alignItems="center"
+                    justifyContent="space-between"
+                >
+                    <Wordmark size="md" />
+                    <Button
+                        variant="contained"
+                        size="medium"
+                        startIcon={<LoginRounded />}
+                        onClick={scrollToSignIn}
+                        sx={{
+                            ...primaryCtaSx,
+                            // Slightly trimmer than the standard primary
+                            // CTA so it doesn't crowd the wordmark on
+                            // narrow viewports.
+                            px: { xs: 2, sm: 2.5 },
+                            py: { xs: 0.75, sm: 1 },
+                            fontSize: { xs: 13, sm: 14 },
+                        }}
+                    >
+                        Sign in
+                    </Button>
+                </Stack>
+            </Container>
 
             {/* Hero */}
             <Container maxWidth="lg" sx={{ pt: { xs: 4, md: 8 }, pb: 8 }}>
@@ -234,10 +285,90 @@ export default function SplashPage() {
                             </Typography>
                         </FadeIn>
                         <FadeIn delay={0.35}>
-                            <Box sx={{ maxWidth: 360 }}>
-                                <GoogleSignInButton />
-                                <DevLoginButton />
-                            </Box>
+                            {/* Frame the sign-in button so it actually
+                                reads as the page's primary action.
+                                Without this the official GSI pill blends
+                                into the background and visitors miss it.
+                                The motion.div wraps the card so the
+                                top-right "Sign in" button can pulse this
+                                element when the user clicks it. */}
+                            {/* `display: block` + `width: 100%, maxWidth: 420`
+                                so the wrapper hugs the card on both axes:
+                                shrinks below 420 on narrow viewports
+                                (otherwise a fixed-width GSI iframe inside
+                                would push it past the column edge), and
+                                caps at 420 on wide viewports (otherwise
+                                the wrapper would stretch to the full
+                                column width and the pulse animation's
+                                box-shadow would draw a phantom frame
+                                around empty space to the right of the
+                                card). */}
+                            <motion.div
+                                ref={ctaRef}
+                                id="sign-in"
+                                animate={pulseControls}
+                                style={{
+                                    display: "block",
+                                    width: "100%",
+                                    maxWidth: 420,
+                                    borderRadius: 16,
+                                    scrollMarginTop: 96,
+                                }}
+                            >
+                                <Box
+                                    sx={{
+                                        ...glassCardSx,
+                                        width: "100%",
+                                        maxWidth: 420,
+                                        p: { xs: 2, sm: 2.5, md: 3 },
+                                        // Defensive guard: if anything
+                                        // inside ever overflows (a fixed-
+                                        // width iframe, a long URL, etc.)
+                                        // contain it here instead of
+                                        // letting it bleed into the
+                                        // page's horizontal scroll.
+                                        overflow: "hidden",
+                                    }}
+                                >
+                                    <Typography
+                                        variant="overline"
+                                        sx={{
+                                            color: theme.palette.primary.main,
+                                            fontWeight: 700,
+                                            letterSpacing: 1.5,
+                                            display: "block",
+                                            mb: 0.5,
+                                        }}
+                                    >
+                                        Get started
+                                    </Typography>
+                                    <Typography
+                                        variant="h6"
+                                        sx={{
+                                            fontWeight: 700,
+                                            mb: 1.5,
+                                            lineHeight: 1.3,
+                                        }}
+                                    >
+                                        Sign in to save your first trip
+                                    </Typography>
+                                    <GoogleSignInButton />
+                                    <Typography
+                                        variant="caption"
+                                        color="text.secondary"
+                                        sx={{
+                                            display: "block",
+                                            mt: 1.5,
+                                            lineHeight: 1.5,
+                                        }}
+                                    >
+                                        Invite-only today — your email needs
+                                        to be on the allowlist. Ask the
+                                        owner to add you.
+                                    </Typography>
+                                    <DevLoginButton />
+                                </Box>
+                            </motion.div>
                         </FadeIn>
                     </Stack>
 
@@ -333,16 +464,34 @@ export default function SplashPage() {
                 </Stack>
             </Container>
 
-            {/* Footer */}
-            <Container maxWidth="lg" sx={{ py: 4 }}>
-                <Typography
-                    variant="caption"
-                    color="text.secondary"
-                    sx={{ display: "block", textAlign: "center" }}
+            {/* Bottom-of-page CTA: catches users who read all the way
+                through "How it works" and decide they want in. Without
+                this the only sign-in entry point is the (now scrolled-
+                away) hero card, which is a usability cliff. */}
+            <Container maxWidth="lg" sx={{ pb: 6 }}>
+                <Box
+                    sx={{
+                        textAlign: "center",
+                        py: { xs: 4, md: 6 },
+                        borderTop: (t) => `1px solid ${t.palette.divider}`,
+                    }}
                 >
-                    Access is invite-only today. Ask the owner to add you to
-                    the allowlist.
-                </Typography>
+                    <Typography
+                        variant="h5"
+                        sx={{ fontWeight: 700, mb: 2 }}
+                    >
+                        Ready to stop guessing?
+                    </Typography>
+                    <Button
+                        variant="contained"
+                        size="large"
+                        startIcon={<LoginRounded />}
+                        onClick={scrollToSignIn}
+                        sx={primaryCtaSx}
+                    >
+                        Sign in to get started
+                    </Button>
+                </Box>
             </Container>
         </Box>
     );

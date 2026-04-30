@@ -69,6 +69,20 @@ function loadGsiScript(): Promise<void> {
     });
 }
 
+// GSI's `width` prop only accepts pixel integers in [200, 400]. Anything
+// outside that range is silently clamped, so we constrain at the call site.
+const MIN_GSI_WIDTH = 200;
+const MAX_GSI_WIDTH = 360;
+
+function pickButtonWidth(host: HTMLElement): number {
+    // `clientWidth` is the rendered inner width of the host Box. The host
+    // is `display: flex` so it always fills its parent's content area;
+    // measuring it gives us the largest GSI button that won't overflow.
+    const available = Math.floor(host.clientWidth);
+    if (!Number.isFinite(available) || available <= 0) return MAX_GSI_WIDTH;
+    return Math.min(MAX_GSI_WIDTH, Math.max(MIN_GSI_WIDTH, available));
+}
+
 export function GoogleSignInButton() {
     const { authConfig, loginWithGoogleCredential } = useSession();
     const containerRef = useRef<HTMLDivElement | null>(null);
@@ -80,6 +94,31 @@ export function GoogleSignInButton() {
         if (!clientId || !containerRef.current) return;
 
         let cancelled = false;
+        let resizeObserver: ResizeObserver | null = null;
+        let lastWidth = 0;
+
+        type GsiId = NonNullable<
+            NonNullable<typeof window.google>["accounts"]
+        >["id"];
+
+        const renderButton = (gsi: GsiId, host: HTMLElement) => {
+            const width = pickButtonWidth(host);
+            // Avoid re-rendering if width hasn't changed — keeps the
+            // button from flickering during scroll/resize where
+            // `clientWidth` rounds to the same int.
+            if (width === lastWidth) return;
+            lastWidth = width;
+            host.innerHTML = "";
+            gsi.renderButton(host, {
+                type: "standard",
+                theme: "filled_blue",
+                size: "large",
+                text: "continue_with",
+                shape: "pill",
+                logo_alignment: "left",
+                width,
+            });
+        };
 
         void (async () => {
             try {
@@ -122,19 +161,24 @@ export function GoogleSignInButton() {
                 auto_select: false,
             });
 
-            host.innerHTML = "";
-            gsi.renderButton(host, {
-                type: "standard",
-                theme: "filled_blue",
-                size: "large",
-                text: "continue_with",
-                shape: "pill",
-                logo_alignment: "left",
-            });
+            renderButton(gsi, host);
+
+            // Watch for viewport / container size changes so a rotation
+            // from portrait→landscape (or any layout shift that grows the
+            // available room) re-renders the button at the new width.
+            // The clamp + dedupe inside renderButton make this cheap.
+            if (typeof ResizeObserver !== "undefined") {
+                resizeObserver = new ResizeObserver(() => {
+                    if (cancelled) return;
+                    renderButton(gsi, host);
+                });
+                resizeObserver.observe(host);
+            }
         })();
 
         return () => {
             cancelled = true;
+            resizeObserver?.disconnect();
         };
     }, [authConfig?.google_oauth_client_id, loginWithGoogleCredential]);
 
