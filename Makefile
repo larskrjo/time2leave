@@ -13,7 +13,7 @@ COMPOSE_DEV := docker compose -f backend/docker-compose.dev.yml
 help:
 	@grep -E '^##' $(MAKEFILE_LIST) | sed -E 's/^## ?//' | awk -F': ' '{printf "  \033[36m%-22s\033[0m %s\n", $$1, $$2}'
 
-## install: Install backend and frontend dependencies.
+## install: Install backend and web dependencies.
 .PHONY: install
 install: install-be install-fe
 
@@ -21,15 +21,16 @@ install: install-be install-fe
 install-be:
 	cd backend && python3 -m venv .venv && . .venv/bin/activate && pip install -e ".[dev]"
 
+## install-fe: Install JS workspace dependencies (apps/web, apps/mobile, packages/*).
 .PHONY: install-fe
 install-fe:
-	cd frontend && npm install
+	npm install
 
-## dev: Start mysql + backend in docker, frontend on the host (two terminals recommended).
+## dev: Start mysql + backend in docker, web on the host (two terminals recommended).
 .PHONY: dev
 dev: dev-be
 	@echo ""
-	@echo "Backend + MySQL are up. Start the frontend in another terminal:"
+	@echo "Backend + MySQL are up. Start the web app in another terminal:"
 	@echo "    make dev-fe"
 
 ## dev-be: Start mysql + backend via docker-compose.dev.yml (detached).
@@ -39,10 +40,10 @@ dev-be:
 	@echo "API:    http://localhost:$${API_HOST_PORT:-8000}"
 	@echo "MySQL:  mysql://root:Abcd1234@localhost:$${MYSQL_HOST_PORT:-3307}/time2leave"
 
-## dev-fe: Start the Vite dev server on the host.
+## dev-fe: Start the Vite dev server for apps/web on the host.
 .PHONY: dev-fe
 dev-fe:
-	cd frontend && npm run dev
+	npm run dev --workspace=@time2leave/web
 
 ## dev-full: Start mysql + backend + frontend all in docker (frontend HMR over volume mount).
 .PHONY: dev-full
@@ -92,7 +93,8 @@ test-be:
 
 .PHONY: test-fe
 test-fe:
-	cd frontend && npm run test
+	npm run test --workspace=@time2leave/shared
+	npm run test --workspace=@time2leave/web
 
 ## test-integration: Run docker-backed backend integration tests.
 .PHONY: test-integration
@@ -114,12 +116,13 @@ format:
 .PHONY: typecheck
 typecheck:
 	cd backend && . .venv/bin/activate && mypy app tests
-	cd frontend && npm run typecheck
+	npm run typecheck --workspace=@time2leave/shared
+	npm run typecheck --workspace=@time2leave/web
 
-## deploy-frontend: Build the SPA and push to S3 + invalidate CloudFront.
+## deploy-frontend: Build the web SPA and push to S3 + invalidate CloudFront.
 .PHONY: deploy-frontend
 deploy-frontend:
-	cd frontend && ./scripts/deploy-to-s3.sh
+	cd apps/web && ./scripts/deploy-to-s3.sh
 
 ## regenerate-seed: Regenerate backend/db/init/002_seed.sql from the fixture generator.
 .PHONY: regenerate-seed

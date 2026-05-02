@@ -45,6 +45,13 @@ class Settings(BaseSettings):
     aws_region: str = "us-west-2"
 
     # Google OAuth / session.
+    #
+    # `google_oauth_client_id` is a *comma-separated* list of accepted
+    # OAuth client IDs. The web SPA uses one ID; the iOS and Android
+    # mobile clients each use their own. We accept a Google ID token
+    # whose `aud` claim matches *any* of these (see
+    # `Settings.google_oauth_client_ids`). Backwards compatible: a
+    # plain `client-id` env value just yields a single-element list.
     google_oauth_client_id: str | None = None
     session_secret: str = "dev-only-change-me"
     session_cookie_name: str = "tlh_session"
@@ -136,6 +143,24 @@ class Settings(BaseSettings):
         if isinstance(v, list):
             return [str(x).strip() for x in v]
         return v
+
+    @property
+    def google_oauth_client_ids(self) -> list[str]:
+        """All accepted OAuth client IDs (web + iOS + Android), de-duplicated.
+
+        Source of truth is the comma-separated `google_oauth_client_id`
+        setting (env var or AWS Secrets Manager). Empty list when the
+        backend is not yet configured for Google sign-in.
+        """
+        raw = self.google_oauth_client_id
+        if not raw:
+            return []
+        seen: dict[str, None] = {}
+        for part in raw.split(","):
+            cleaned = part.strip()
+            if cleaned and cleaned not in seen:
+                seen[cleaned] = None
+        return list(seen.keys())
 
 
 def _apply_legacy_env_aliases() -> None:

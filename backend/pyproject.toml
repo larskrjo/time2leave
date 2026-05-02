@@ -94,4 +94,8 @@ addopts = "-ra -q -m 'not integration'"
 asyncio_mode = "auto"
 filterwarnings = [
     "ignore::jwt.warnings.InsecureKeyLengthWarning",
+    # Belt-and-suspenders: also match by message text so a transitional
+    # PyJWT version that drops the warning class doesn't break the
+    # config parse.
+    "ignore:The HMAC key is .* bytes long:UserWarning",
 ]

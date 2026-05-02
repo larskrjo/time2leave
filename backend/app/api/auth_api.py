@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response, status
 from pydantic import BaseModel, EmailStr, Field
 
 from app.auth.dependencies import get_current_user, get_optional_user, is_admin
@@ -51,6 +51,11 @@ class AuthedUserResponse(BaseModel):
     name: str | None
     picture_url: str | None
     is_admin: bool
+    # Bearer-token fields populated only for clients that opt in via
+    # `X-Client: mobile` or `?token=true`. Web clients ignore these and
+    # rely on the HttpOnly `tlh_session` cookie instead.
+    session_token: str | None = None
+    session_expires_at: str | None = None
 
 
 def _serialize_user(user: User, settings: Settings) -> AuthedUserResponse:
@@ -63,13 +68,51 @@ def _serialize_user(user: User, settings: Settings) -> AuthedUserResponse:
     )
 
 
+def _wants_session_token(
+    request: Request, x_client: str | None
+) -> bool:
+    """Should this login response include the bearer-token fields?
+
+    Mobile clients can opt in either via the explicit `X-Client: mobile`
+    header (preferred — works on every request, not just login) or with
+    a `?token=true` query param (handy from a browser console for ad-hoc
+    testing). Web stays on the cookie path by default."""
+    if x_client and x_client.strip().lower() == "mobile":
+        return True
+    return request.query_params.get("token", "").lower() == "true"
+
+
+def _attach_session(
+    *,
+    user: User,
+    settings: Settings,
+    response: Response,
+    include_token_in_body: bool,
+) -> AuthedUserResponse:
+    """Issue a session JWT, write it to the cookie, and (when the
+    caller opted in) echo it back in the response body so a mobile
+    client without cookie storage can persist it itself."""
+    token, expires_at = issue_session_token(
+        user_id=user.id, email=user.email, settings=settings
+    )
+    set_session_cookie(response, token, expires_at, settings)
+    payload = _serialize_user(user, settings)
+    if include_token_in_body:
+        payload.session_token = token
+        payload.session_expires_at = expires_at.isoformat()
+    return payload
+
+
 @auth_router.post("/auth/google")
 async def login_with_google(
     body: GoogleLoginRequest,
+    request: Request,
     response: Response,
     settings: Settings = Depends(get_settings),
+    x_client: str | None = Header(default=None),
 ) -> AuthedUserResponse:
-    """Exchange a Google ID token for a session cookie."""
+    """Exchange a Google ID token for a session cookie (web) or a bearer
+    token (mobile, via `X-Client: mobile` / `?token=true`)."""
     try:
         identity = verify_google_id_token(body.credential, settings)
     except InvalidGoogleIdTokenError as exc:
@@ -96,24 +139,29 @@ async def login_with_google(
         )
 
     user = upsert_user_from_google(identity)
-    token, expires_at = issue_session_token(
-        user_id=user.id, email=user.email, settings=settings
+    return _attach_session(
+        user=user,
+        settings=settings,
+        response=response,
+        include_token_in_body=_wants_session_token(request, x_client),
     )
-    set_session_cookie(response, token, expires_at, settings)
-    return _serialize_user(user, settings)
 
 
 @auth_router.post("/auth/dev-login")
 async def dev_login(
     body: DevLoginRequest,
+    request: Request,
     response: Response,
     settings: Settings = Depends(get_settings),
+    x_client: str | None = Header(default=None),
 ) -> AuthedUserResponse:
     """Escape hatch for local dev / tests when no real GSI is available.
 
     Only mounted when `APP_ENV != "prod"` and `ENABLE_DEV_LOGIN` is truthy.
     Requires the email to already be on the allowlist or a known user, so
     an accidentally-exposed dev endpoint still can't log in a stranger.
+    Honors `X-Client: mobile` so the Expo dev build can use the same
+    bearer-token round trip as a production login.
     """
     if settings.app_env == "prod" or not settings.enable_dev_login:
         raise HTTPException(
@@ -141,11 +189,12 @@ async def dev_login(
         )
         user = upsert_user_from_google(identity)
 
-    token, expires_at = issue_session_token(
-        user_id=user.id, email=user.email, settings=settings
+    return _attach_session(
+        user=user,
+        settings=settings,
+        response=response,
+        include_token_in_body=_wants_session_token(request, x_client),
     )
-    set_session_cookie(response, token, expires_at, settings)
-    return _serialize_user(user, settings)
 
 
 @auth_router.post("/auth/logout")

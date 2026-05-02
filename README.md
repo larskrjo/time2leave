@@ -21,12 +21,28 @@ Lives at https://time2leave.com.
   managed in the `auth_allowlist` table (admin endpoints + bootstrap-
   from-env).
 
+## Repo layout
+
+This is an npm workspaces monorepo:
+
+```
+apps/
+  web/        # React Router 7 SPA — the existing browser app
+  mobile/     # Expo / React Native app for iOS + Android (see apps/mobile/README.md)
+packages/
+  shared/    # @time2leave/shared — pure TS types + API client + helpers
+backend/      # FastAPI service (unchanged location)
+```
+
+Both clients call the same backend and re-use `@time2leave/shared` for
+types, the API client, time/slot helpers, and heatmap math.
+
 ## Quickstart
 
 ```bash
-make install      # set up backend venv + frontend node_modules
+make install      # set up backend venv + JS workspace node_modules
 make dev-be       # mysql + api in docker (schema + dev user seeded automatically)
-make dev-fe       # frontend on http://localhost:5173
+make dev-fe       # web app on http://localhost:5173 (apps/web)
 ```
 
 Open http://localhost:5173, click **"Continue as dev user"** (the
@@ -160,34 +176,35 @@ make test-integration  # docker-backed end-to-end tests (testcontainers)
 make typecheck       # mypy + tsc
 ```
 
-## Frontend
+## Web
 
-Location: [`frontend/`](frontend/).
+Location: [`apps/web/`](apps/web/).
 
 - `app/routes/splash.tsx` — animated landing page for logged-out users.
 - `app/routes/trips.tsx` — list of the user's trips + new-trip CTA.
 - `app/routes/trips.new.tsx` — origin / destination form.
 - `app/routes/trips.$tripId.tsx` — outbound/return tabs, per-day "best slot" summary strip, full heatmap, live backfill polling.
 - `app/lib/session.tsx` — `<SessionProvider>` + `useSession()`. Fetches `/api/v1/me` and `/api/v1/auth/config` on mount.
-- `app/lib/trips.ts` — typed API client for `/trips` endpoints + canonical 06:00–21:00 / 15-min slot generator.
+- `app/lib/trips.ts` — thin web wrapper around `@time2leave/shared`'s typed API client.
 - `app/components/ProtectedRoute.tsx` — redirects unauthenticated users to `/?next=…`.
 - `app/components/TripHeatmap.tsx` — full grid with hue-mapped cells and a "best slot per day" summary chip strip.
 
 ### Running
 
+From the **repo root** (npm workspaces):
+
 ```bash
-cd frontend
-npm install
-npm run dev         # http://localhost:5173
-npm run test        # vitest
-npm run typecheck   # react-router typegen + tsc
-npm run build       # production bundle in build/client/
+npm install                                 # installs apps/web, apps/mobile, packages/shared
+npm run dev --workspace=@time2leave/web     # http://localhost:5173
+npm run test --workspace=@time2leave/web    # vitest
+npm run typecheck --workspace=@time2leave/web
+npm run build --workspace=@time2leave/web   # production bundle in apps/web/build/client/
 ```
 
 The Google OAuth client id is fetched from the backend (`GET
 /api/v1/auth/config`) so the SPA does not need its own
-`VITE_GOOGLE_OAUTH_CLIENT_ID`. Frontend env vars (see
-[`frontend/.env.example`](frontend/.env.example)):
+`VITE_GOOGLE_OAUTH_CLIENT_ID`. Web env vars (see
+[`apps/web/.env.example`](apps/web/.env.example)):
 
 | Var | Notes |
 | --- | --- |
@@ -275,7 +292,7 @@ CloudFront. The script waits until the invalidation completes.
 
 #### CloudFront one-time setup
 
-`frontend/scripts/configure-cloudfront.sh` configures two distribution-
+`apps/web/scripts/configure-cloudfront.sh` configures two distribution-
 level things that aren't part of the per-deploy artifact pipe:
 
   1. **Response Headers Policy** — attaches standard SPA hardening
@@ -293,7 +310,7 @@ when changing any of these settings. Idempotent: re-runs only update
 what drifted.
 
 ```bash
-./frontend/scripts/configure-cloudfront.sh
+./apps/web/scripts/configure-cloudfront.sh
 ```
 
 ### CI

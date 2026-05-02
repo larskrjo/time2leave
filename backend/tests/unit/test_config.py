@@ -55,3 +55,23 @@ def test_env_overrides_defaults(monkeypatch):
     assert s.mysql_host == "db.example.com"
     assert s.mysql_port == 4242
     assert s.data_provider == "google"
+
+
+def test_google_oauth_client_ids_splits_comma_separated():
+    """A single env var carries the web + iOS + Android client IDs;
+    `google_oauth_client_ids` exposes them as a list for the audience
+    check in `verify_google_id_token`."""
+    s = Settings(
+        google_oauth_client_id="web-id,  ios-id ,android-id,web-id"
+    )
+    assert s.google_oauth_client_ids == ["web-id", "ios-id", "android-id"]
+
+
+def test_google_oauth_client_ids_empty_when_unset():
+    assert Settings(google_oauth_client_id=None).google_oauth_client_ids == []
+    assert Settings(google_oauth_client_id="").google_oauth_client_ids == []
+
+
+def test_google_oauth_client_ids_handles_single_value():
+    s = Settings(google_oauth_client_id="only-one")
+    assert s.google_oauth_client_ids == ["only-one"]

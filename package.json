@@ -1,0 +1,20 @@
+{
+  "name": "time2leave",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "build:web": "npm run build --workspace=@time2leave/web",
+    "dev:web": "npm run dev --workspace=@time2leave/web",
+    "test:web": "npm run test --workspace=@time2leave/web",
+    "typecheck:web": "npm run typecheck --workspace=@time2leave/web",
+    "test:shared": "npm run test --workspace=@time2leave/shared",
+    "typecheck:shared": "npm run typecheck --workspace=@time2leave/shared",
+    "dev:mobile": "npm run start --workspace=@time2leave/mobile",
+    "ios:mobile": "npm run ios --workspace=@time2leave/mobile",
+    "android:mobile": "npm run android --workspace=@time2leave/mobile",
+    "typecheck:mobile": "npm run typecheck --workspace=@time2leave/mobile"
+  }
+}

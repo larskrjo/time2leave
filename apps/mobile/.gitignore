@@ -1,0 +1,42 @@
+# OSX
+.DS_Store
+
+# Xcode
+ios/
+
+# Android
+android/
+
+# Expo
+.expo/
+dist/
+web-build/
+
+# Native
+*.orig.*
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
+
+# Metro
+.metro-health-check*
+
+# Debug
+npm-debug.*
+yarn-debug.*
+yarn-error.*
+
+# macOS
+*.pem
+
+# Local env files
+.env*.local
+.env
+
+# Typescript
+*.tsbuildinfo
+
+# Generated
+expo-env.d.ts.bak

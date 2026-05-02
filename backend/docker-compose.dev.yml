@@ -78,20 +78,24 @@ services:
       start_period: 5s
       retries: 20
 
+  # Optional containerized web dev server. Most contributors run
+  # `npm run dev:web` on the host instead for faster HMR. Build context
+  # is the repo root so `node_modules` resolves the @time2leave/shared
+  # workspace symlink.
   frontend:
     profiles: ["full"]
     image: node:20-alpine
-    container_name: time2leave-frontend-dev
-    working_dir: /app
+    container_name: time2leave-web-dev
+    working_dir: /repo
     ports:
       - "${FRONTEND_HOST_PORT:-5173}:5173"
     environment:
       VITE_API_BASE_URL: http://localhost:8000
     volumes:
-      - ../frontend:/app
-      - frontend_node_modules:/app/node_modules
-    command: sh -c "npm install && npm run dev -- --host 0.0.0.0"
+      - ../:/repo
+      - web_node_modules:/repo/node_modules
+    command: sh -c "npm install && npm run dev --workspace=@time2leave/web -- --host 0.0.0.0"
 
 volumes:
   mysql_data:
-  frontend_node_modules:
+  web_node_modules:

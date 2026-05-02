@@ -8,7 +8,7 @@ Route handlers use one of:
 
 from __future__ import annotations
 
-from fastapi import Cookie, Depends, HTTPException, status
+from fastapi import Cookie, Depends, Header, HTTPException, status
 
 from app.auth.sessions import (
     InvalidSessionError,
@@ -23,29 +23,57 @@ def _cookie_name() -> str:
     return get_settings().session_cookie_name
 
 
-def _session_claims_from_cookie(
-    cookie_value: str | None, settings: Settings
+def _session_claims_from_token(
+    token: str | None, settings: Settings
 ) -> SessionClaims | None:
-    if not cookie_value:
+    """Decode a session JWT (cookie value or bearer token), tolerating
+    invalid/expired tokens by returning None instead of raising."""
+    if not token:
         return None
     try:
-        return verify_session_token(cookie_value, settings)
+        return verify_session_token(token, settings)
     except InvalidSessionError:
         return None
 
 
+def _bearer_token(authorization_header: str | None) -> str | None:
+    """Extract `<jwt>` from an `Authorization: Bearer <jwt>` header.
+
+    Returns None for missing, malformed, or non-Bearer schemes — the
+    caller treats that the same as "no credentials presented".
+    """
+    if not authorization_header:
+        return None
+    parts = authorization_header.strip().split(None, 1)
+    if len(parts) != 2 or parts[0].lower() != "bearer":
+        return None
+    candidate = parts[1].strip()
+    return candidate or None
+
+
 def get_optional_user(
     tlh_session: str | None = Cookie(default=None),
+    authorization: str | None = Header(default=None),
     settings: Settings = Depends(get_settings),
 ) -> User | None:
-    """Return the current user if the session cookie is valid, else None.
+    """Return the current user from a cookie *or* bearer token.
+
+    Web clients ship a `tlh_session` HttpOnly cookie set on the
+    `/api/v1/auth/google` response; mobile clients (Expo / React
+    Native) opt out of cookies and instead send
+    `Authorization: Bearer <jwt>` using the same JWT format. Cookie
+    wins when both are present so that nothing changes for the SPA.
 
     Note: the `tlh_session` parameter name must match
     `Settings.session_cookie_name`. We keep the default name in sync via
     tests; changing the setting at runtime would also need a matching
     parameter here if you want anonymous callers to be identified.
     """
-    claims = _session_claims_from_cookie(tlh_session, settings)
+    claims = _session_claims_from_token(tlh_session, settings)
+    if claims is None:
+        claims = _session_claims_from_token(
+            _bearer_token(authorization), settings
+        )
     if claims is None:
         return None
     return get_user_by_id(claims.user_id)

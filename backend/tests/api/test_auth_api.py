@@ -144,3 +144,111 @@ def test_auth_config_exposes_client_id(patched_app: TestClient) -> None:
     body = r.json()
     assert body["google_oauth_client_id"] == "test-oauth-client"
     assert body["dev_login_enabled"] is True
+
+
+def test_login_omits_session_token_for_web_clients(
+    patched_app: TestClient,
+) -> None:
+    """Default response shape (no `X-Client` header, no `?token=true`)
+    must NOT leak the JWT in the body — web clients use the cookie."""
+    r = patched_app.post("/api/v1/auth/google", json={"credential": "good"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["session_token"] is None
+    assert body["session_expires_at"] is None
+    assert "tlh_session" in r.cookies
+
+
+def test_login_returns_session_token_for_mobile_header(
+    patched_app: TestClient,
+) -> None:
+    """`X-Client: mobile` opts the response into bearer-token mode for
+    Expo / React Native clients that can't rely on cookies."""
+    r = patched_app.post(
+        "/api/v1/auth/google",
+        json={"credential": "good"},
+        headers={"X-Client": "mobile"},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert isinstance(body["session_token"], str)
+    assert body["session_token"].count(".") == 2  # JWT shape (h.p.s)
+    assert isinstance(body["session_expires_at"], str)
+    # Cookie is still set as well, so the same endpoint serves both
+    # cookie- and bearer-style consumers transparently.
+    assert "tlh_session" in r.cookies
+
+
+def test_login_returns_session_token_for_query_param(
+    patched_app: TestClient,
+) -> None:
+    """`?token=true` is the manual / dev-console opt-in equivalent of
+    the `X-Client: mobile` header."""
+    r = patched_app.post(
+        "/api/v1/auth/google?token=true",
+        json={"credential": "good"},
+    )
+    assert r.status_code == 200
+    assert isinstance(r.json()["session_token"], str)
+
+
+def test_dev_login_returns_session_token_for_mobile_header(
+    patched_app: TestClient,
+) -> None:
+    r = patched_app.post(
+        "/api/v1/auth/dev-login",
+        json={"email": "allowed@example.com"},
+        headers={"X-Client": "mobile"},
+    )
+    assert r.status_code == 200
+    assert isinstance(r.json()["session_token"], str)
+
+
+def test_bearer_token_authenticates_subsequent_requests(
+    patched_app: TestClient,
+) -> None:
+    """A mobile client signs in once, persists the JWT, and uses it as
+    `Authorization: Bearer <jwt>` on every subsequent request — no
+    cookie required."""
+    r = patched_app.post(
+        "/api/v1/auth/google",
+        json={"credential": "good"},
+        headers={"X-Client": "mobile"},
+    )
+    assert r.status_code == 200
+    token = r.json()["session_token"]
+    assert token
+
+    # Drop cookies so we can prove the bearer header alone is enough.
+    patched_app.cookies.clear()
+    r2 = patched_app.get(
+        "/api/v1/me", headers={"Authorization": f"Bearer {token}"}
+    )
+    assert r2.status_code == 200
+    assert r2.json()["email"] == "allowed@example.com"
+
+
+def test_bearer_token_with_garbage_value_is_anonymous(
+    patched_app: TestClient,
+) -> None:
+    """Malformed / unknown JWTs are silently treated as anonymous so
+    `/me` keeps its 200 + `{user: null}` contract."""
+    r = patched_app.get(
+        "/api/v1/me",
+        headers={"Authorization": "Bearer not-a-real-jwt"},
+    )
+    assert r.status_code == 200
+    assert r.json() == {"user": None}
+
+
+def test_non_bearer_authorization_scheme_is_ignored(
+    patched_app: TestClient,
+) -> None:
+    """Anything other than the Bearer scheme is treated as no
+    credential — no 500, no scheme-confusion attack surface."""
+    r = patched_app.get(
+        "/api/v1/me",
+        headers={"Authorization": "Basic dXNlcjpwYXNz"},
+    )
+    assert r.status_code == 200
+    assert r.json() == {"user": None}

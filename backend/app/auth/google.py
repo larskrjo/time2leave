@@ -39,19 +39,27 @@ _ALLOWED_ISSUERS = ("accounts.google.com", "https://accounts.google.com")
 def verify_google_id_token(token: str, settings: Settings) -> GoogleIdentity:
     """Validate a Google ID token and return the claims we trust.
 
-    Raises `InvalidGoogleIdTokenError` on any problem so callers can 401
+    Accepts the token's `aud` claim against *any* of the configured
+    OAuth client IDs (web, iOS, Android), so the same backend can
+    serve all three clients off a single Google Cloud project. Raises
+    `InvalidGoogleIdTokenError` on any problem so callers can 401
     without leaking which check failed.
     """
-    if not settings.google_oauth_client_id:
+    accepted_audiences = settings.google_oauth_client_ids
+    if not accepted_audiences:
         raise InvalidGoogleIdTokenError(
             "GOOGLE_OAUTH_CLIENT_ID is not configured on the backend"
         )
 
     try:
+        # Pass `audience=None` so the google-auth library skips its own
+        # audience check; we then verify `aud` against the *list* of
+        # accepted client IDs ourselves. Signature, expiry, and issuer
+        # checks still happen inside `verify_oauth2_token`.
         claims = id_token.verify_oauth2_token(
             token,
             google_requests.Request(),
-            settings.google_oauth_client_id,
+            audience=None,
         )
     except Exception as exc:
         logger.info("Rejecting Google ID token: %s", exc)
@@ -60,6 +68,14 @@ def verify_google_id_token(token: str, settings: Settings) -> GoogleIdentity:
     issuer = claims.get("iss")
     if issuer not in _ALLOWED_ISSUERS:
         raise InvalidGoogleIdTokenError(f"Unexpected issuer: {issuer!r}")
+
+    aud = claims.get("aud")
+    if aud not in accepted_audiences:
+        # `aud` is a single string for ID tokens (per OIDC spec); we
+        # never receive an array here, so no need to handle that case.
+        raise InvalidGoogleIdTokenError(
+            f"Token audience {aud!r} is not in the configured client ID list"
+        )
 
     email = claims.get("email")
     sub = claims.get("sub")
