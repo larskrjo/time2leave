@@ -1,4 +1,4 @@
--- Schema for the `time2leave` database (previously `traffic_larsjohansen_com`).
+-- Schema for the `time2leave` database.
 -- Multi-user trips app: users sign in via Google OAuth (gated by an
 -- allowlist) and manage up to N trips. Commute samples are gathered weekly
 -- for every active trip in both directions.

@@ -1,7 +1,7 @@
 services:
-  api-traffic:
-    image: api-traffic:latest
-    container_name: api-traffic
+  time2leave-api:
+    image: time2leave-api:latest
+    container_name: time2leave-api
     ports: ["8485:8000"]
     restart: unless-stopped
     environment:
@@ -12,7 +12,7 @@ services:
       # Credentials still come from AWS Secrets Manager (see app/config.py).
       # The app's lifespan startup runs db/init/001_schema.sql idempotently,
       # so flipping this to a new database name creates it on first boot
-      # (no manual DBA step). Predecessor: `traffic_larsjohansen_com`.
+      # (no manual DBA step).
       MYSQL_HOST: "mysql"
       MYSQL_PORT: "3306"
       MYSQL_DATABASE: "time2leave"

@@ -12,7 +12,6 @@ export default defineConfig({
             "127.0.0.1",
             "time2leave.com",
             "www.time2leave.com",
-            "traffic.larsjohansen.com",
         ],
     },
 });

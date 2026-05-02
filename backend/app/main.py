@@ -68,8 +68,7 @@ async def lifespan(app: FastAPI):
 
     # Idempotently create the database + tables before anything else touches
     # the connection pool. Lets us cut prod over to a brand-new DB name
-    # (e.g. traffic_larsjohansen_com -> time2leave) without a manual DBA
-    # step: the app creates the new DB on first boot.
+    # without a manual DBA step: the app creates the new DB on first boot.
     try:
         ensure_schema(settings)
     except Exception:
@@ -129,13 +128,9 @@ def create_app() -> FastAPI:
         app.include_router(admin_router)
 
     if settings.app_env == "prod":
-        # New canonical domain first, legacy alias kept during the
-        # migration so the old URL keeps working until DNS / any
-        # bookmarks fully move over.
         origins: list[str] = [
             "https://time2leave.com",
             "https://www.time2leave.com",
-            "https://traffic.larsjohansen.com",
         ]
         origin_regex: str | None = None
     else:

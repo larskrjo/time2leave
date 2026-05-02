@@ -5,8 +5,7 @@ Know exactly when to leave. Sign in with Google, save up to a few
 15-minute-resolution heatmap of expected drive times for the current
 week, in both directions, 06:00 – 21:00, every day Mon-Sun.
 
-Lives at https://time2leave.com (and still deploys under the legacy
-`traffic.larsjohansen.com` during migration).
+Lives at https://time2leave.com.
 
 - **Backend** — FastAPI + MySQL + APScheduler. Friday-23:00-PT job samples
   Google's Routes Matrix API for every active trip and stores per-slot
@@ -113,13 +112,13 @@ All values have sensible local defaults (see [`backend/.env.example`](backend/.e
 | `GOOGLE_OAUTH_CLIENT_ID` | _unset_ | Required for the real Google sign-in. Local dev uses `ENABLE_DEV_LOGIN` instead. |
 | `SESSION_SECRET` | `dev-only-change-me` | HMAC secret for session JWTs. **Always set in prod** (loaded from AWS Secrets Manager). |
 | `SESSION_COOKIE_NAME` | `tlh_session` | Cookie name for the session JWT. |
-| `SESSION_COOKIE_DOMAIN` | _unset_ | Set to e.g. `.larsjohansen.com` so api/frontend share cookies. |
+| `SESSION_COOKIE_DOMAIN` | _unset_ | Set to e.g. `.time2leave.com` so api/frontend share cookies. |
 | `SESSION_TTL_HOURS` | `168` | One week. |
 | `ENABLE_DEV_LOGIN` | `true` | `POST /auth/dev-login` is mounted only when this is true. Forced off in prod. |
 | `ADMIN_EMAILS` | _empty_ | Comma-separated. These users get `is_admin: true` and admin endpoints. |
 | `AUTH_ALLOWLIST_BOOTSTRAP` | _empty_ | Comma-separated. Inserted into `auth_allowlist` on every startup (idempotent). |
 | `MAX_TRIPS_PER_USER` / `MAX_TRIPS_PER_ADMIN` / `MAX_TRIPS_TOTAL` / `MAX_TRIP_MUTATIONS_PER_WEEK` / `MAX_WEEKLY_ROUTES_CALLS` | `1` / `2` / `10` / `1` / `150000` | Quota / cost guardrails. |
-| `ALLOWED_ORIGINS` | `http://localhost:5173, http://127.0.0.1:5173, http://traffic.larsjohansen.com:5173` | Comma-separated CORS origins (outside prod). Prod always allows exactly `https://traffic.larsjohansen.com`. |
+| `ALLOWED_ORIGINS` | `http://localhost:5173, http://127.0.0.1:5173` | Comma-separated CORS origins (outside prod). Prod always allows exactly `https://time2leave.com` and `https://www.time2leave.com`. |
 | `MYSQL_HOST_PORT` / `API_HOST_PORT` / `FRONTEND_HOST_PORT` | `3307` / `8000` / `5173` | Host-side ports published by `docker-compose.dev.yml`. MySQL defaults to `3307` so it doesn't clash with a Homebrew/system MySQL on `3306`. Override if any of these are taken on your machine. |
 
 ### Inviting people
@@ -191,7 +190,7 @@ The Google OAuth client id is fetched from the backend (`GET
 | Var | Notes |
 | --- | --- |
 | `VITE_API_BASE_URL` | Backend base URL. Defaults to `http://localhost:8000` in dev. |
-| `VITE_GOOGLE_MAPS_API_KEY` | Optional **browser-restricted** Maps JS API key used for Places autocomplete on `/trips/new`. Leave unset to get a plain text input. Must have "Maps JavaScript API" + "Places API" enabled and your dev/prod origins (e.g. `http://localhost:5173/*` and `https://traffic.larsjohansen.com/*`) in the HTTP referrer allowlist — otherwise Google returns `RefererNotAllowedMapError` at runtime and the app silently falls back to plain text entry. |
+| `VITE_GOOGLE_MAPS_API_KEY` | Optional **browser-restricted** Maps JS API key used for Places autocomplete on `/trips/new`. Leave unset to get a plain text input. Must have "Maps JavaScript API" + "Places API" enabled and your dev/prod origins (e.g. `http://localhost:5173/*` and `https://time2leave.com/*`) in the HTTP referrer allowlist — otherwise Google returns `RefererNotAllowedMapError` at runtime and the app silently falls back to plain text entry. |
 
 ## Deployment
 
@@ -210,14 +209,14 @@ fails fast with a clear message if `npm` or `aws` is missing.
 
 ```bash
 # On the EC2 host:
-cd /home/ec2-user/traffic-larsjohansen-com
+cd /home/ec2-user/time2leave
 git pull
 cd backend
 ./scripts/build-and-deploy.sh
 ```
 
 Uses [`backend/docker-compose.yml`](backend/docker-compose.yml) to run the
-`api-traffic` container on port 8485, joined to the external `shared_network`
+`time2leave-api` container on port 8485, joined to the external `shared_network`
 so it can reach the sibling `mysql` container. AWS Secrets Manager secret
 `MySecret` (in `us-west-2`) supplies MySQL credentials, the Google Maps API
 key, the Google OAuth client id, and `session_secret`.
@@ -230,9 +229,8 @@ opens a connection scoped to `MYSQL_DATABASE` and executes the table
 DDL from `db/init/001_schema.sql`. Every `CREATE TABLE` uses
 `IF NOT EXISTS`, so the effect is:
 
-- Brand-new (but pre-created) DB — current state, since we cut over
-  from `traffic_larsjohansen_com` to `time2leave`: the app creates all
-  tables on first boot.
+- Brand-new (but pre-created) DB — the app creates all tables on first
+  boot.
 - Existing DB: startup is a no-op beyond a handful of cheap checks.
 - Adding a new table to the schema file: the next deploy creates it.
   (Column changes to existing tables still require a proper migration —
@@ -261,15 +259,15 @@ curl https://api.time2leave.com/api/v1/auth/config
 ### Frontend — S3 + CloudFront
 
 From your **local machine** (requires Node 20+ and AWS CLI with creds for
-bucket `traffic-larsjohansen-frontend` / distribution `E1XJU7E7JJA9QX`):
+bucket `time2leave-frontend` / distribution `E1XJU7E7JJA9QX`):
 
 ```bash
-cd ~/code/traffic-larsjohansen-com
+cd ~/code/time2leave
 git pull
 make deploy-frontend
 ```
 
-Builds the SPA, syncs `build/client/` to `s3://traffic-larsjohansen-frontend`
+Builds the SPA, syncs `build/client/` to `s3://time2leave-frontend`
 (immutable cache for assets, `no-cache` for `index.html`), and invalidates
 CloudFront. The script waits until the invalidation completes.
 

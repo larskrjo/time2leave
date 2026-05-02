@@ -12,7 +12,7 @@
 
 set -euo pipefail
 
-BUCKET="traffic-larsjohansen-frontend"
+BUCKET="time2leave-frontend"
 REGION="us-west-2"
 CF_DIST_ID="E1XJU7E7JJA9QX"
 

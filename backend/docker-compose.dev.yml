@@ -14,7 +14,7 @@
 services:
   mysql:
     image: mysql:8
-    container_name: traffic-mysql-dev
+    container_name: time2leave-mysql-dev
     restart: unless-stopped
     ports:
       - "${MYSQL_HOST_PORT:-3307}:3306"
@@ -36,8 +36,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: api-traffic:dev
-    container_name: traffic-api-dev
+    image: time2leave-api:dev
+    container_name: time2leave-api-dev
     depends_on:
       mysql:
         condition: service_healthy
@@ -81,7 +81,7 @@ services:
   frontend:
     profiles: ["full"]
     image: node:20-alpine
-    container_name: traffic-frontend-dev
+    container_name: time2leave-frontend-dev
     working_dir: /app
     ports:
       - "${FRONTEND_HOST_PORT:-5173}:5173"

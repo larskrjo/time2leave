@@ -29,7 +29,7 @@ def _build_pool() -> pooling.MySQLConnectionPool:
         "autocommit": True,
     }
     return pooling.MySQLConnectionPool(
-        pool_name="traffic-bay-area",
+        pool_name="time2leave",
         pool_size=settings.mysql_pool_size,
         **dbconfig,
     )

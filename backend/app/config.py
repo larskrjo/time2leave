@@ -86,12 +86,11 @@ class Settings(BaseSettings):
     commute_throttle_seconds: float = 0.5
 
     # CORS origins allowed outside of prod. In prod we always allow exactly
-    # https://traffic.larsjohansen.com.
+    # https://time2leave.com and https://www.time2leave.com.
     allowed_origins: Annotated[list[str], NoDecode] = Field(
         default_factory=lambda: [
             "http://localhost:5173",
             "http://127.0.0.1:5173",
-            "http://traffic.larsjohansen.com:5173",
         ]
     )
 
