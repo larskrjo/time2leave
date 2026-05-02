@@ -61,13 +61,22 @@ def get_current_user(user: User | None = Depends(get_optional_user)) -> User:
     return user
 
 
+def is_admin(user: User, settings: Settings) -> bool:
+    """Return True iff `user.email` is in `settings.admin_emails`.
+
+    Single source of truth for admin checks — used by `get_admin_user`,
+    by `_serialize_user` (to expose `is_admin` to the SPA), and by the
+    trip-quota path (admins get a higher per-user trip cap).
+    """
+    return user.email.lower() in {a.lower() for a in settings.admin_emails}
+
+
 def get_admin_user(
     user: User = Depends(get_current_user),
     settings: Settings = Depends(get_settings),
 ) -> User:
     """Require an authenticated user whose email is in `admin_emails`."""
-    admins = {a.lower() for a in settings.admin_emails}
-    if user.email.lower() not in admins:
+    if not is_admin(user, settings):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Admin privileges required",

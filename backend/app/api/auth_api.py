@@ -16,7 +16,7 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from pydantic import BaseModel, EmailStr, Field
 
-from app.auth.dependencies import get_current_user, get_optional_user
+from app.auth.dependencies import get_current_user, get_optional_user, is_admin
 from app.auth.google import InvalidGoogleIdTokenError, verify_google_id_token
 from app.auth.sessions import (
     clear_session_cookie,
@@ -54,13 +54,12 @@ class AuthedUserResponse(BaseModel):
 
 
 def _serialize_user(user: User, settings: Settings) -> AuthedUserResponse:
-    admins = {a.lower() for a in settings.admin_emails}
     return AuthedUserResponse(
         id=user.id,
         email=user.email,
         name=user.name,
         picture_url=user.picture_url,
-        is_admin=user.email.lower() in admins,
+        is_admin=is_admin(user, settings),
     )
 
 

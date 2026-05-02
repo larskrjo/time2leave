@@ -58,8 +58,12 @@ class Settings(BaseSettings):
         default_factory=list
     )
 
-    # Per-user and global trip quotas.
+    # Per-user and global trip quotas. Admins (emails in `admin_emails`)
+    # get the higher `max_trips_per_admin` so the operator can keep a
+    # personal-use trip alongside a "production smoke test" trip without
+    # raising the cap for the whole user base.
     max_trips_per_user: int = 1
+    max_trips_per_admin: int = 2
     max_trips_total: int = 10
     # Per-user rolling-7-day cap on "billed" trip mutations: trip creates
     # and trip patches that change addresses (or swap them). Each of those

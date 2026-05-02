@@ -279,6 +279,64 @@ def test_create_trip_enforces_per_user_cap(
     assert r.status_code == 409
 
 
+def test_admin_user_gets_elevated_per_user_trip_cap(
+    patched_app: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Admins (emails in ADMIN_EMAILS) get `max_trips_per_admin`, not `_per_user`.
+
+    Mutation cap is bumped here so the post loop isn't blocked by the
+    weekly mutation guard before we can test the trip-count guard.
+    """
+    monkeypatch.setenv("ADMIN_EMAILS", "user@example.com")  # matches fixture user
+    monkeypatch.setenv("MAX_TRIPS_PER_USER", "1")
+    monkeypatch.setenv("MAX_TRIPS_PER_ADMIN", "2")
+    monkeypatch.setenv("MAX_TRIP_MUTATIONS_PER_WEEK", "5")
+    from app.config import reset_settings_cache
+
+    reset_settings_cache()
+
+    r = patched_app.get("/api/v1/trips/quota")
+    assert r.status_code == 200
+    assert r.json()["limit"] == 2
+
+    for i in range(2):
+        r = patched_app.post(
+            "/api/v1/trips",
+            json={
+                "origin_address": f"{100 + i} Main St",
+                "destination_address": f"{200 + i} Oak Ave",
+            },
+        )
+        assert r.status_code == 201, r.text
+
+    r = patched_app.post(
+        "/api/v1/trips",
+        json={
+            "origin_address": "999 Nope St",
+            "destination_address": "888 Stop Ave",
+        },
+    )
+    assert r.status_code == 409
+
+
+def test_non_admin_user_keeps_lower_per_user_trip_cap(
+    patched_app: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Sanity check the inverse: a non-admin sees `max_trips_per_user`."""
+    monkeypatch.setenv("ADMIN_EMAILS", "someone-else@example.com")
+    monkeypatch.setenv("MAX_TRIPS_PER_USER", "1")
+    monkeypatch.setenv("MAX_TRIPS_PER_ADMIN", "2")
+    from app.config import reset_settings_cache
+
+    reset_settings_cache()
+
+    r = patched_app.get("/api/v1/trips/quota")
+    assert r.status_code == 200
+    assert r.json()["limit"] == 1
+
+
 def test_get_trip_unknown_id_404s(patched_app: TestClient) -> None:
     r = patched_app.get("/api/v1/trips/12345")
     assert r.status_code == 404

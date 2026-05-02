@@ -13,7 +13,7 @@ import logging
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
-from app.auth.dependencies import get_current_user
+from app.auth.dependencies import get_current_user, is_admin
 from app.config import Settings, get_settings
 from app.services.address_validation import (
     AddressValidator,
@@ -184,6 +184,17 @@ async def list_my_trips(user: User = Depends(get_current_user)) -> list[TripOut]
     return [_trip_to_out(t) for t in list_trips_for_user(user.id)]
 
 
+def _trip_cap_for(user: User, settings: Settings) -> int:
+    """Per-user trip cap, with admins getting the elevated `max_trips_per_admin`.
+
+    Single source of truth so the cap shown to the SPA via /quota and
+    the cap actually enforced by `create_trip` can never drift apart.
+    """
+    if is_admin(user, settings):
+        return settings.max_trips_per_admin
+    return settings.max_trips_per_user
+
+
 @trips_router.get("/quota", response_model=QuotaInfo)
 async def get_my_quota(
     user: User = Depends(get_current_user),
@@ -193,7 +204,7 @@ async def get_my_quota(
     mq = mutation_quota_for_user(user.id, settings)
     return QuotaInfo(
         used=count_trips_for_user(user.id),
-        limit=settings.max_trips_per_user,
+        limit=_trip_cap_for(user, settings),
         mutations_used=mq.used,
         mutations_limit=mq.limit,
         mutations_oldest_age_seconds=mq.oldest_age_seconds,
@@ -252,7 +263,7 @@ async def create_my_trip(
             name=body.name,
             origin_address=origin,
             destination_address=destination,
-            per_user_cap=settings.max_trips_per_user,
+            per_user_cap=_trip_cap_for(user, settings),
             total_cap=settings.max_trips_total,
         )
     except TripQuotaExceededError as exc:
