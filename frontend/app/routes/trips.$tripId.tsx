@@ -38,6 +38,8 @@ import {
     Tab,
     Tabs,
     TextField,
+    ToggleButton,
+    ToggleButtonGroup,
     Tooltip,
     Typography,
 } from "@mui/material";
@@ -76,6 +78,7 @@ import {
     type HeatmapPayload,
     type TripDetail,
     type TripPatch,
+    type Week,
 } from "~/lib/trips";
 
 export function meta() {
@@ -198,6 +201,7 @@ function EditableHero({
     onSwap,
     swapping,
     deleting,
+    eyebrowExtra,
 }: {
     trip: TripDetail;
     weekLabel: string;
@@ -210,6 +214,8 @@ function EditableHero({
     onSwap: () => void;
     swapping: boolean;
     deleting: boolean;
+    /** Optional element rendered in the hero eyebrow row, right of the date. */
+    eyebrowExtra?: React.ReactNode;
 }) {
     const [name, setName] = useState(trip.name ?? "");
     const [origin, setOrigin] = useState(trip.origin_address);
@@ -453,9 +459,23 @@ function EditableHero({
         </Stack>
     );
 
+    const eyebrowEl = eyebrowExtra ? (
+        <Stack
+            direction="row"
+            spacing={1.25}
+            alignItems="center"
+            sx={{ flexWrap: "wrap" }}
+        >
+            <span>{`Week of ${weekLabel}`}</span>
+            {eyebrowExtra}
+        </Stack>
+    ) : (
+        `Week of ${weekLabel}`
+    );
+
     return (
         <PageHero
-            eyebrow={`Week of ${weekLabel}`}
+            eyebrow={eyebrowEl}
             headline={headlineEl}
             sub={subEl}
             right={rightEl}
@@ -469,6 +489,7 @@ function TripDetailInner({ tripId }: { tripId: string }) {
     const [heatmap, setHeatmap] = useState<HeatmapPayload | null>(null);
     const [backfill, setBackfill] = useState<BackfillStatus | null>(null);
     const [view, setView] = useState<Direction>("outbound");
+    const [selectedWeek, setSelectedWeek] = useState<Week>("current");
     const [highlight, setHighlight] = useState<HeatmapHighlight>(null);
     const [error, setError] = useState<string | null>(null);
     // 429 (weekly mutation cap) is a deliberate cost-control, not a
@@ -483,14 +504,12 @@ function TripDetailInner({ tripId }: { tripId: string }) {
 
     const direction: Direction = view;
 
-    const loadAll = useCallback(async () => {
+    // Trip detail is independent of the viewed week, so it loads once
+    // per `tripId` and never refetches when the user toggles weeks.
+    const loadTrip = useCallback(async () => {
         try {
-            const [tripDetail, h] = await Promise.all([
-                getTrip(tripId),
-                getTripHeatmap(tripId),
-            ]);
+            const tripDetail = await getTrip(tripId);
             setTrip(tripDetail);
-            setHeatmap(h);
             setBackfill(tripDetail.backfill);
         } catch (err) {
             setError(isApiError(err) ? err.detail : "Failed to load trip");
@@ -498,8 +517,34 @@ function TripDetailInner({ tripId }: { tripId: string }) {
     }, [tripId]);
 
     useEffect(() => {
-        void loadAll();
-    }, [loadAll]);
+        void loadTrip();
+    }, [loadTrip]);
+
+    // Heatmap fetches piggy-back on `selectedWeek`. The initial mount
+    // hits this with "current"; subsequent toggles refetch with "next"
+    // (or back). The `cancelled` flag drops a stale response if the
+    // user clicks faster than the network.
+    useEffect(() => {
+        let cancelled = false;
+        async function fetchHeatmap() {
+            try {
+                const h = await getTripHeatmap(tripId, selectedWeek);
+                if (!cancelled) setHeatmap(h);
+            } catch (err) {
+                if (!cancelled) {
+                    setError(
+                        isApiError(err)
+                            ? err.detail
+                            : "Failed to load heatmap",
+                    );
+                }
+            }
+        }
+        void fetchHeatmap();
+        return () => {
+            cancelled = true;
+        };
+    }, [tripId, selectedWeek]);
 
     const stopPolling = useCallback(() => {
         if (pollRef.current !== null) {
@@ -510,6 +555,15 @@ function TripDetailInner({ tripId }: { tripId: string }) {
 
     useEffect(() => {
         if (!backfill) return;
+        // Suppress polling whenever the user is viewing next week.
+        // Next week is only toggleable when its data is fully populated
+        // (see `next_week_available` gate below), so there's nothing to
+        // wait for; polling here would just trigger needless requests
+        // (and confusing UI re-renders) on the visible heatmap.
+        if (selectedWeek === "next") {
+            stopPolling();
+            return;
+        }
         if (backfill.percent_complete >= 100) {
             stopPolling();
             return;
@@ -518,13 +572,13 @@ function TripDetailInner({ tripId }: { tripId: string }) {
 
         pollRef.current = window.setInterval(async () => {
             try {
-                const fresh = await getTripBackfillStatus(tripId);
+                const fresh = await getTripBackfillStatus(tripId, "current");
                 setBackfill(fresh);
                 if (
                     fresh.ready > (backfill?.ready ?? 0) ||
                     fresh.percent_complete >= 100
                 ) {
-                    const h = await getTripHeatmap(tripId);
+                    const h = await getTripHeatmap(tripId, selectedWeek);
                     setHeatmap(h);
                 }
                 if (fresh.percent_complete >= 100) {
@@ -536,7 +590,7 @@ function TripDetailInner({ tripId }: { tripId: string }) {
         }, POLL_INTERVAL_MS);
 
         return stopPolling;
-    }, [backfill, stopPolling, tripId]);
+    }, [backfill, selectedWeek, stopPolling, tripId]);
 
     const onDelete = () => {
         if (!trip) return;
@@ -556,6 +610,10 @@ function TripDetailInner({ tripId }: { tripId: string }) {
         });
     };
 
+    // `useCallback` deps are already explicit elsewhere; pulling
+    // `selectedWeek` into both onSave and onSwap closures means the
+    // heatmap refetch after a save/swap targets the week the user is
+    // currently viewing, not stale `current` from initial mount.
     const onSave = useCallback(
         async (patch: TripPatch) => {
             setSaving(true);
@@ -568,7 +626,7 @@ function TripDetailInner({ tripId }: { tripId: string }) {
                 setEditing(false);
                 // Address change → heatmap is going to be stale; re-fetch.
                 if (patch.origin_address || patch.destination_address) {
-                    const h = await getTripHeatmap(tripId);
+                    const h = await getTripHeatmap(tripId, selectedWeek);
                     setHeatmap(h);
                 }
             } catch (err) {
@@ -582,7 +640,7 @@ function TripDetailInner({ tripId }: { tripId: string }) {
                 setSaving(false);
             }
         },
-        [tripId],
+        [tripId, selectedWeek],
     );
 
     const onSwap = useCallback(async () => {
@@ -594,7 +652,7 @@ function TripDetailInner({ tripId }: { tripId: string }) {
             const updated = await updateTrip(tripId, { swap_addresses: true });
             setTrip(updated);
             setBackfill(updated.backfill);
-            const h = await getTripHeatmap(tripId);
+            const h = await getTripHeatmap(tripId, selectedWeek);
             setHeatmap(h);
         } catch (err) {
             if (isApiError(err)) {
@@ -606,7 +664,7 @@ function TripDetailInner({ tripId }: { tripId: string }) {
         } finally {
             setSwapping(false);
         }
-    }, [tripId, trip]);
+    }, [tripId, trip, selectedWeek]);
 
     // Keyboard shortcuts: Esc back; ←/→ tabs; e edit.
     useEffect(() => {
@@ -651,13 +709,53 @@ function TripDetailInner({ tripId }: { tripId: string }) {
         );
     }
 
-    const inProgress = backfill !== null && backfill.percent_complete < 100;
+    // Hide the in-progress banner whenever the user is viewing next
+    // week — the toggle is gated on next-week being fully populated, so
+    // any in-flight current-week backfill is irrelevant to the visible
+    // heatmap and showing the warning chip would be confusing.
+    const inProgress =
+        selectedWeek === "current" &&
+        backfill !== null &&
+        backfill.percent_complete < 100;
     const weekStart = new Date(heatmap.week_start_date + "T00:00:00");
     const weekLabel = weekStart.toLocaleDateString(undefined, {
         month: "short",
         day: "numeric",
         year: "numeric",
     });
+
+    const weekToggle = heatmap.next_week_available ? (
+        <ToggleButtonGroup
+            value={selectedWeek}
+            exclusive
+            size="small"
+            color="primary"
+            aria-label="Which week to view"
+            onChange={(_e, next: Week | null) => {
+                if (next === null) return;
+                setSelectedWeek(next);
+                setHighlight(null);
+            }}
+            sx={{
+                ".MuiToggleButton-root": {
+                    textTransform: "none",
+                    fontWeight: 600,
+                    px: 1.5,
+                    py: 0.25,
+                    letterSpacing: 0,
+                    fontSize: 12,
+                    lineHeight: 1.4,
+                },
+            }}
+        >
+            <ToggleButton value="current" aria-label="View this week">
+                This week
+            </ToggleButton>
+            <ToggleButton value="next" aria-label="View next week">
+                Next week
+            </ToggleButton>
+        </ToggleButtonGroup>
+    ) : null;
 
     return (
         <Stack spacing={3}>
@@ -685,6 +783,7 @@ function TripDetailInner({ tripId }: { tripId: string }) {
                 onSwap={onSwap}
                 swapping={swapping}
                 deleting={false}
+                eyebrowExtra={weekToggle}
             />
             {error && (
                 <FadeIn>
@@ -838,6 +937,15 @@ function TripDetailInner({ tripId }: { tripId: string }) {
                                                 heatmap={heatmap}
                                                 direction={direction}
                                                 highlight={highlight}
+                                                // The "NOW" dot only makes sense
+                                                // for the live week. Suppress it
+                                                // (and the highlighted weekday
+                                                // label) when previewing next
+                                                // week — there's no "now"
+                                                // position in a future week.
+                                                showNow={
+                                                    selectedWeek === "current"
+                                                }
                                             />
                                         </Box>
                                     </Box>

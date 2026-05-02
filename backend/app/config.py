@@ -74,7 +74,8 @@ class Settings(BaseSettings):
     # before Geocoding so we don't even pay for the pre-flight when a
     # user is over budget.
     max_trip_mutations_per_week: int = 1
-    # Fail-closed ceiling on Routes Matrix calls the Friday job may make.
+    # Fail-closed ceiling on Routes Matrix calls the weekly Mon-01:00-PT
+    # job may make.
     max_weekly_routes_calls: int = 150_000
 
     # Commute sampling window (local time).

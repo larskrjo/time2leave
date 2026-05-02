@@ -85,10 +85,15 @@ async def lifespan(app: FastAPI):
         logger.exception("Allowlist bootstrap raised at startup; continuing")
 
     if settings.app_env == "prod":
+        # Mondays at 01:00 PT, just after the Pacific week rollover.
+        # Pairs with the dual-week backfill on trip create/edit so users
+        # see both the current and next week populated almost
+        # continuously (the only blind window is the ~1h gap between
+        # Pacific Monday 00:00 rollover and this cron firing at 01:00).
         job = scheduler.add_job(
             run_data_gathering,
             trigger=CronTrigger(
-                day_of_week="fri", hour=23, minute=0, timezone=pacific_tz
+                day_of_week="mon", hour=1, minute=0, timezone=pacific_tz
             ),
             id="weekly_commute_data_gathering",
             replace_existing=True,
@@ -96,7 +101,7 @@ async def lifespan(app: FastAPI):
         scheduler.start()
         next_run = job.next_run_time
         logger.info(
-            "Scheduler started (prod): Fridays 23:00 PT (next run: %s)",
+            "Scheduler started (prod): Mondays 01:00 PT (next run: %s)",
             next_run.isoformat() if next_run else "N/A",
         )
     else:

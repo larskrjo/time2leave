@@ -639,8 +639,21 @@ function MobileAccordionHeatmap({
 }
 
 /**
- * Tiny summary strip: fastest departure per weekday for the given direction.
+ * Per-day "fastest departure" strip rendered above the heatmap.
+ *
+ * Each pill shows the best slot for one weekday (in weekday order),
+ * and the strip spans the **full section width** (same outer
+ * `maxWidth` as the heatmap, edge-to-edge with no asymmetric gutter)
+ * so it visually balances with the section header on the left rather
+ * than reading as "shifted right" by the heatmap's 72px day-label
+ * gutter. Pills share the available width via `flex: 1 1 0` so all N
+ * cover the strip with equal slices.
+ *
  * Empty days (nothing sampled yet) are omitted.
+ *
+ * On mobile the heatmap collapses into a per-weekday accordion, so
+ * there's no time grid to align with — we render a wrap layout there
+ * that lets each pill size to its content.
  */
 export function TripHeatmapSummary({
     heatmap,
@@ -648,6 +661,8 @@ export function TripHeatmapSummary({
     highlight,
     onHoverSlot,
 }: SummaryProps) {
+    const theme = useTheme();
+    const isMobile = useMediaQuery(theme.breakpoints.down("md"));
     const reduce = useReducedMotion();
     const weekdays: Weekday[] = heatmap.weekdays ?? WEEKDAYS;
     const directionPayload = heatmap[direction] ?? {};
@@ -674,117 +689,191 @@ export function TripHeatmapSummary({
         );
     }
 
+    if (isMobile) {
+        return (
+            <BestChipWrap
+                bests={bestPerDay}
+                highlight={highlight}
+                onHoverSlot={onHoverSlot}
+                reduce={reduce}
+            />
+        );
+    }
+
+    // Desktop: spread the pills across the section's full content
+    // width so the strip is symmetrical (no left-only gutter that
+    // would push it visually off-center).
+    return (
+        <Box sx={{ width: "100%", maxWidth: 1400, mx: "auto" }}>
+            <Stack direction="row" spacing={1}>
+                {bestPerDay.map((b, idx) => {
+                    const isActive =
+                        highlight?.day === b.day && highlight?.slot === b.slot;
+                    return (
+                        <Box
+                            key={b.day}
+                            // `flex: 1 1 0` + `minWidth: 0` makes every
+                            // pill take an equal slice of the strip
+                            // regardless of content length, so 7 pills
+                            // span the table cleanly with even gaps.
+                            sx={{ flex: "1 1 0", minWidth: 0 }}
+                        >
+                            <BestChip
+                                best={b}
+                                isActive={isActive}
+                                onHoverSlot={onHoverSlot}
+                                reduce={reduce}
+                                delayIdx={idx}
+                            />
+                        </Box>
+                    );
+                })}
+            </Stack>
+        </Box>
+    );
+}
+
+type BestPill = { day: Weekday; slot: string; minutes: number };
+
+function BestChip({
+    best,
+    isActive,
+    onHoverSlot,
+    reduce,
+    delayIdx,
+    fullWidth = true,
+}: {
+    best: BestPill;
+    isActive: boolean;
+    onHoverSlot?: (h: HeatmapHighlight) => void;
+    reduce: boolean | null;
+    delayIdx: number;
+    /** True when the pill should fill its parent slot (desktop strip). */
+    fullWidth?: boolean;
+}) {
+    return (
+        <motion.div
+            initial={reduce ? { opacity: 1 } : { opacity: 0, y: 6 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{
+                duration: 0.28,
+                delay: reduce ? 0 : delayIdx * 0.04,
+                ease: "easeOut",
+            }}
+            style={fullWidth ? { width: "100%" } : undefined}
+        >
+            <Box
+                role={onHoverSlot ? "button" : undefined}
+                tabIndex={onHoverSlot ? 0 : undefined}
+                aria-label={
+                    onHoverSlot
+                        ? `Highlight ${WEEKDAY_LONG[best.day]} ${best.slot} on heatmap`
+                        : undefined
+                }
+                onMouseEnter={
+                    onHoverSlot
+                        ? () =>
+                              onHoverSlot({ day: best.day, slot: best.slot })
+                        : undefined
+                }
+                onMouseLeave={
+                    onHoverSlot ? () => onHoverSlot(null) : undefined
+                }
+                onFocus={
+                    onHoverSlot
+                        ? () =>
+                              onHoverSlot({ day: best.day, slot: best.slot })
+                        : undefined
+                }
+                onBlur={onHoverSlot ? () => onHoverSlot(null) : undefined}
+                sx={{
+                    px: 1.5,
+                    py: 1,
+                    borderRadius: 2,
+                    textAlign: "center",
+                    width: fullWidth ? "100%" : undefined,
+                    minWidth: fullWidth ? 0 : 112,
+                    border: isActive
+                        ? "1px solid rgba(30,64,175,0.55)"
+                        : "1px solid rgba(30,64,175,0.14)",
+                    cursor: onHoverSlot ? "pointer" : "default",
+                    transition:
+                        "transform 180ms ease, box-shadow 180ms ease, border-color 180ms ease",
+                    transform: isActive ? "translateY(-2px)" : undefined,
+                    boxShadow: isActive
+                        ? "0 10px 24px -12px rgba(30,64,175,0.5)"
+                        : undefined,
+                    outline: "none",
+                    "&:focus-visible": {
+                        borderColor: "rgba(30,64,175,0.7)",
+                        boxShadow: "0 0 0 3px rgba(30,64,175,0.2)",
+                    },
+                    background: isActive
+                        ? "linear-gradient(135deg, rgba(30,64,175,0.16), rgba(239,108,0,0.18))"
+                        : "linear-gradient(135deg, rgba(30,64,175,0.06), rgba(239,108,0,0.08))",
+                }}
+            >
+                <Typography
+                    variant="caption"
+                    sx={{
+                        color: "text.secondary",
+                        fontWeight: 700,
+                        letterSpacing: 1,
+                        textTransform: "uppercase",
+                        fontSize: 10,
+                        display: "block",
+                    }}
+                >
+                    {best.day} · best
+                </Typography>
+                <Typography
+                    variant="subtitle2"
+                    sx={{
+                        fontWeight: 800,
+                        fontVariantNumeric: "tabular-nums",
+                        color: "text.primary",
+                        whiteSpace: "nowrap",
+                    }}
+                >
+                    {formatSlot12h(best.slot)}{" "}
+                    <Box
+                        component="span"
+                        sx={{ color: "success.main", fontWeight: 700 }}
+                    >
+                        {minutesLabel(best.minutes)}
+                    </Box>
+                </Typography>
+            </Box>
+        </motion.div>
+    );
+}
+
+function BestChipWrap({
+    bests,
+    highlight,
+    onHoverSlot,
+    reduce,
+}: {
+    bests: BestPill[];
+    highlight?: HeatmapHighlight;
+    onHoverSlot?: (h: HeatmapHighlight) => void;
+    reduce: boolean | null;
+}) {
     return (
         <Stack direction="row" spacing={1.25} flexWrap="wrap" useFlexGap>
-            {bestPerDay.map((b, idx) => {
-                const isActive =
-                    highlight?.day === b.day && highlight?.slot === b.slot;
-                return (
-                    <motion.div
-                        key={b.day}
-                        initial={reduce ? { opacity: 1 } : { opacity: 0, y: 6 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        transition={{
-                            duration: 0.28,
-                            delay: reduce ? 0 : idx * 0.04,
-                            ease: "easeOut",
-                        }}
-                    >
-                        <Box
-                            role={onHoverSlot ? "button" : undefined}
-                            tabIndex={onHoverSlot ? 0 : undefined}
-                            aria-label={
-                                onHoverSlot
-                                    ? `Highlight ${WEEKDAY_LONG[b.day]} ${b.slot} on heatmap`
-                                    : undefined
-                            }
-                            onMouseEnter={
-                                onHoverSlot
-                                    ? () =>
-                                          onHoverSlot({
-                                              day: b.day,
-                                              slot: b.slot,
-                                          })
-                                    : undefined
-                            }
-                            onMouseLeave={
-                                onHoverSlot ? () => onHoverSlot(null) : undefined
-                            }
-                            onFocus={
-                                onHoverSlot
-                                    ? () =>
-                                          onHoverSlot({
-                                              day: b.day,
-                                              slot: b.slot,
-                                          })
-                                    : undefined
-                            }
-                            onBlur={
-                                onHoverSlot ? () => onHoverSlot(null) : undefined
-                            }
-                            sx={{
-                                px: 1.75,
-                                py: 1,
-                                borderRadius: 2,
-                                minWidth: 112,
-                                border: isActive
-                                    ? "1px solid rgba(30,64,175,0.55)"
-                                    : "1px solid rgba(30,64,175,0.14)",
-                                cursor: onHoverSlot ? "pointer" : "default",
-                                transition:
-                                    "transform 180ms ease, box-shadow 180ms ease, border-color 180ms ease",
-                                transform: isActive
-                                    ? "translateY(-2px)"
-                                    : undefined,
-                                boxShadow: isActive
-                                    ? "0 10px 24px -12px rgba(30,64,175,0.5)"
-                                    : undefined,
-                                outline: "none",
-                                "&:focus-visible": {
-                                    borderColor: "rgba(30,64,175,0.7)",
-                                    boxShadow:
-                                        "0 0 0 3px rgba(30,64,175,0.2)",
-                                },
-                                background: isActive
-                                    ? "linear-gradient(135deg, rgba(30,64,175,0.16), rgba(239,108,0,0.18))"
-                                    : "linear-gradient(135deg, rgba(30,64,175,0.06), rgba(239,108,0,0.08))",
-                            }}
-                        >
-                            <Typography
-                                variant="caption"
-                                sx={{
-                                    color: "text.secondary",
-                                    fontWeight: 700,
-                                    letterSpacing: 1,
-                                    textTransform: "uppercase",
-                                    fontSize: 10,
-                                }}
-                            >
-                                {b.day} · best
-                            </Typography>
-                            <Typography
-                                variant="subtitle2"
-                                sx={{
-                                    fontWeight: 800,
-                                    fontVariantNumeric: "tabular-nums",
-                                    color: "text.primary",
-                                }}
-                            >
-                                {formatSlot12h(b.slot)}{" "}
-                                <Box
-                                    component="span"
-                                    sx={{
-                                        color: "success.main",
-                                        fontWeight: 700,
-                                    }}
-                                >
-                                    {minutesLabel(b.minutes)}
-                                </Box>
-                            </Typography>
-                        </Box>
-                    </motion.div>
-                );
-            })}
+            {bests.map((b, idx) => (
+                <BestChip
+                    key={b.day}
+                    best={b}
+                    isActive={
+                        highlight?.day === b.day && highlight?.slot === b.slot
+                    }
+                    onHoverSlot={onHoverSlot}
+                    reduce={reduce}
+                    delayIdx={idx}
+                    fullWidth={false}
+                />
+            ))}
         </Stack>
     );
 }

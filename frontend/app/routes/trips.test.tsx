@@ -27,7 +27,7 @@ describe("/trips route", () => {
             http.get("*/api/v1/trips", () =>
                 HttpResponse.json([
                     sampleTripSummary,
-                    { ...sampleTripSummary, id: 2, name: "Gym" },
+                    { ...sampleTripSummary, id: "fedc987654", name: "Gym" },
                 ]),
             ),
         );

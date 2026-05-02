@@ -28,10 +28,12 @@ fixture commute samples) and has no business in prod.
 from __future__ import annotations
 
 import logging
+import secrets
 from pathlib import Path
 from typing import Any
 
 import mysql.connector
+from mysql.connector import Error as MySQLError
 
 from app.config import Settings, get_settings
 
@@ -89,6 +91,9 @@ def ensure_schema(settings: Settings | None = None) -> None:
 
     The target database (`settings.mysql_database`) must already exist;
     we connect with `database=...` and only run the table-level DDL.
+    After the DDL we run any in-place column migrations that the
+    `CREATE TABLE IF NOT EXISTS` statements can't apply (because the
+    table already exists from a previous boot).
     """
     settings = settings or get_settings()
     if not _SCHEMA_FILE.exists():
@@ -116,10 +121,112 @@ def ensure_schema(settings: Settings | None = None) -> None:
         try:
             for stmt in statements:
                 cursor.execute(stmt)
+            _ensure_trips_slug_column(cursor)
         finally:
             cursor.close()
     finally:
         conn.close()
     logger.info(
         "Schema bootstrap complete; %s is ready", settings.mysql_database
+    )
+
+
+# ---------------------------------------------------------------------------
+# In-place migrations
+#
+# `CREATE TABLE IF NOT EXISTS` is a no-op when the table already exists, so
+# any new columns added after first deploy need a separate migration step.
+# Each helper here is idempotent: it inspects information_schema before
+# touching anything.
+# ---------------------------------------------------------------------------
+
+
+_SLUG_HEX_BYTES = 5  # 5 bytes → 10 lowercase hex chars, like a git short SHA.
+
+
+def _generate_slug() -> str:
+    return secrets.token_hex(_SLUG_HEX_BYTES)
+
+
+def _column_exists(cursor: Any, table: str, column: str) -> bool:
+    cursor.execute(
+        """
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = DATABASE()
+          AND table_name = %s
+          AND column_name = %s
+        LIMIT 1
+        """,
+        (table, column),
+    )
+    return cursor.fetchone() is not None
+
+
+def _ensure_trips_slug_column(cursor: Any) -> None:
+    """Add `trips.slug` (+ unique index) to a pre-existing trips table.
+
+    Three-phase migration so we never have a window with a NOT NULL
+    column that some rows can't satisfy:
+
+      1. ADD COLUMN nullable.
+      2. Backfill every NULL row with a fresh random slug, retrying on
+         the (vanishingly rare) UNIQUE collision.
+      3. MODIFY COLUMN to NOT NULL and add the UNIQUE index.
+
+    For a brand-new database the `CREATE TABLE` in 001_schema.sql
+    already has all of this, and `_column_exists(...)` returns True,
+    so this whole function is a cheap no-op.
+    """
+    if _column_exists(cursor, "trips", "slug"):
+        return
+
+    logger.info("Adding `trips.slug` column (in-place migration)")
+    cursor.execute(
+        "ALTER TABLE trips ADD COLUMN `slug` VARCHAR(16) NULL AFTER `id`"
+    )
+
+    cursor.execute("SELECT id FROM trips WHERE slug IS NULL")
+    rows = cursor.fetchall() or []
+    pending_ids = [int(r[0]) for r in rows]
+    if pending_ids:
+        logger.info("Backfilling slugs for %d existing trip(s)", len(pending_ids))
+        for trip_id in pending_ids:
+            _assign_random_slug(cursor, trip_id)
+
+    cursor.execute(
+        "ALTER TABLE trips MODIFY COLUMN `slug` VARCHAR(16) NOT NULL"
+    )
+    cursor.execute(
+        "ALTER TABLE trips ADD UNIQUE KEY `uniq_trips_slug` (`slug`)"
+    )
+    logger.info("`trips.slug` migration complete")
+
+
+_MAX_SLUG_RETRIES = 8
+
+
+def _assign_random_slug(cursor: Any, trip_id: int) -> None:
+    """Pick a random slug and write it to one row, retrying on collision.
+
+    A 10-hex-char slug has ~1.1e12 possibilities; collisions in the
+    backfill set are statistically impossible at our trip volumes.
+    The retry loop is here purely as a defense in depth so a single
+    unlucky hash never aborts the migration.
+    """
+    for _ in range(_MAX_SLUG_RETRIES):
+        candidate = _generate_slug()
+        try:
+            cursor.execute(
+                "UPDATE trips SET slug = %s WHERE id = %s",
+                (candidate, trip_id),
+            )
+            return
+        except MySQLError as exc:
+            # Duplicate-key on slug → try again. Anything else propagates.
+            if getattr(exc, "errno", None) != 1062:
+                raise
+    raise RuntimeError(
+        f"Exhausted slug-generation retries for trip {trip_id}; "
+        "is the slug column constrained correctly?"
     )

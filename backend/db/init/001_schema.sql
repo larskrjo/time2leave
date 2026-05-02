@@ -37,8 +37,13 @@ CREATE TABLE IF NOT EXISTS auth_allowlist (
     UNIQUE KEY `uniq_allowlist_email` (`email`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
+-- `slug` is the public-facing trip identifier (10-char hex, e.g. `a1b2c3d4e5`).
+-- `id` stays as the internal int PK so commute_samples / trip_mutation_log
+-- can keep their cheap int FKs. The slug is what the SPA, URLs, and
+-- the JSON API see, so we never leak a sequential count of trips.
 CREATE TABLE IF NOT EXISTS trips (
     `id`                  int           NOT NULL AUTO_INCREMENT,
+    `slug`                varchar(16)   NOT NULL,
     `user_id`             int           NOT NULL,
     `name`                varchar(255)           DEFAULT NULL,
     `origin_address`      varchar(1024) NOT NULL,
@@ -46,6 +51,7 @@ CREATE TABLE IF NOT EXISTS trips (
     `created_at`          timestamp     NULL     DEFAULT CURRENT_TIMESTAMP,
     `deleted_at`          timestamp     NULL     DEFAULT NULL,
     PRIMARY KEY (`id`),
+    UNIQUE KEY `uniq_trips_slug` (`slug`),
     KEY `idx_trips_user_active` (`user_id`, `deleted_at`),
     CONSTRAINT `fk_trips_user` FOREIGN KEY (`user_id`)
         REFERENCES `users` (`id`) ON DELETE CASCADE

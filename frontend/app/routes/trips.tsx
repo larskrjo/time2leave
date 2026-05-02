@@ -158,10 +158,15 @@ function TripsListInner() {
                     isApiError(err) ? err.detail : "Failed to delete trip",
                 );
                 // Put it back — our optimistic removal was wrong.
+                // Re-sort by `created_at` desc to match the backend's
+                // newest-first ordering. Slugs are opaque strings, so we
+                // can't sort by `id` numerically anymore.
                 setTrips((current) =>
                     current && !current.some((t) => t.id === trip.id)
-                        ? [...current, trip].sort(
-                              (a, b) => b.id - a.id,
+                        ? [...current, trip].sort((a, b) =>
+                              (b.created_at ?? "").localeCompare(
+                                  a.created_at ?? "",
+                              ),
                           )
                         : current,
                 );
@@ -372,7 +377,7 @@ function TripsListInner() {
                 eyebrow={`Hi, ${greetingName}`}
                 headline="Your saved trips"
                 accent="saved"
-                sub="We sample both directions, every day Mon–Sun, from 6am to 9pm — refreshed every Friday at 11pm PT."
+                sub="We sample both directions, every day Mon–Sun, from 6am to 9pm — refreshed every Monday at 1am PT."
                 right={heroRight}
             />
 

@@ -27,8 +27,12 @@ export const sampleUser = {
     is_admin: true,
 };
 
+// Public trip identifier is now a 10-hex-char slug, not an int. Tests
+// that build URLs with this fixture should treat it as opaque.
+export const sampleTripSlug = "abc123def4";
+
 export const sampleTripSummary = {
-    id: 1,
+    id: sampleTripSlug,
     name: "Home to Work",
     origin_address: "123 Alpha St",
     destination_address: "999 Beta Ave",
@@ -76,6 +80,32 @@ export const sampleHeatmapResponse: HeatmapPayload = {
     },
     week_start_date: "2025-11-10",
     weekdays: ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"],
+    next_week_available: false,
+};
+
+/** Slimmer fixture for next-week assertions. Same shape, different week. */
+export const sampleNextWeekHeatmapResponse: HeatmapPayload = {
+    outbound: {
+        Mon: { "07:00": 30 },
+        Tue: {},
+        Wed: {},
+        Thu: {},
+        Fri: { "08:00": 55 },
+        Sat: {},
+        Sun: {},
+    },
+    return: {
+        Mon: {},
+        Tue: {},
+        Wed: {},
+        Thu: {},
+        Fri: { "17:00": 60 },
+        Sat: {},
+        Sun: {},
+    },
+    week_start_date: "2025-11-17",
+    weekdays: ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"],
+    next_week_available: true,
 };
 
 export const handlers = [

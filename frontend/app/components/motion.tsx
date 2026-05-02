@@ -146,7 +146,7 @@ export function PageHero({
     sub,
     right,
 }: {
-    eyebrow: string;
+    eyebrow: ReactNode;
     headline: ReactNode;
     accent?: string;
     sub?: ReactNode;

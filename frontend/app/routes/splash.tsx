@@ -62,7 +62,7 @@ const STEPS: Step[] = [
     {
         icon: <TuneRounded />,
         title: "We sample 15-minute windows, 6am-9pm, both ways",
-        body: "Every Friday night we refresh the week ahead using the Google Routes Matrix API so your plan always reflects live traffic patterns.",
+        body: "Every Monday morning we refresh the week ahead using the Google Routes Matrix API so your plan always reflects live traffic patterns.",
     },
     {
         icon: <AccessTimeRounded />,

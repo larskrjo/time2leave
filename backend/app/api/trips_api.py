@@ -1,16 +1,20 @@
 """Per-user trip CRUD + heatmap endpoint.
 
 A logged-in user can list, create, read, and delete their own trips and
-fetch the heatmap for the current week. Creating a trip schedules a
-one-off background backfill so the heatmap starts populating immediately
-instead of waiting for the next Friday cron.
+fetch the heatmap for the current or next week. Creating or
+address-editing a trip schedules background backfills for *both*
+weeks so the heatmap starts populating immediately instead of waiting
+for the weekly Monday cron and so the next-week toggle is available
+right away.
 """
 
 from __future__ import annotations
 
 import logging
+from datetime import date
+from typing import Literal
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
 from app.auth.dependencies import get_current_user, is_admin
@@ -37,13 +41,17 @@ from app.services.trips import (
     create_trip,
     current_week_start,
     get_heatmap_for_trip,
-    get_trip_for_user,
+    get_trip_for_user_by_slug,
+    is_week_fully_populated,
     list_trips_for_user,
+    next_week_start,
     sample_status_for_trip,
     soft_delete_trip,
     update_trip,
 )
 from app.services.users import User
+
+WeekParam = Literal["current", "next"]
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +59,14 @@ trips_router = APIRouter(prefix="/api/v1/trips", tags=["Trips"])
 
 
 class TripOut(BaseModel):
-    id: int
+    """Public trip projection. `id` is the 10-hex-char public slug.
+
+    The internal int PK is never serialized — it stays inside the
+    backend so we don't leak a sequential count of trips through the
+    JSON API or the URL bar.
+    """
+
+    id: str
     name: str | None
     origin_address: str
     destination_address: str
@@ -106,7 +121,7 @@ class TripDetail(TripOut):
 
 def _trip_to_out(trip: Trip) -> TripOut:
     return TripOut(
-        id=trip.id,
+        id=trip.slug,
         name=trip.name,
         origin_address=trip.origin_address,
         destination_address=trip.destination_address,
@@ -114,8 +129,13 @@ def _trip_to_out(trip: Trip) -> TripOut:
     )
 
 
-def _backfill_for(trip_id: int) -> BackfillStatus:
-    status_dict = sample_status_for_trip(trip_id, current_week_start())
+def _resolve_week(week: WeekParam) -> date:
+    return current_week_start() if week == "current" else next_week_start()
+
+
+def _backfill_for(trip_id: int, week_start: date | None = None) -> BackfillStatus:
+    week_start = week_start or current_week_start()
+    status_dict = sample_status_for_trip(trip_id, week_start)
     total = status_dict["total"]
     ready = status_dict["ready"]
     percent = (ready / total * 100.0) if total else 0.0
@@ -124,18 +144,34 @@ def _backfill_for(trip_id: int) -> BackfillStatus:
     )
 
 
-def _kickoff_backfill(trip_id: int) -> None:
-    """Fire a one-off sample fill for a newly created trip.
+def _kickoff_backfill(trip_id: int, week_start: date) -> None:
+    """Fire a one-off sample fill for `(trip_id, week_start)`.
 
     Imported lazily so tests / API-only boot paths don't pay the import
     cost of the data-gathering module.
     """
-    from app.job.data_gathering import backfill_trip_current_week
+    from app.job.data_gathering import backfill_trip_for_week
 
     try:
-        backfill_trip_current_week(trip_id)
+        backfill_trip_for_week(trip_id, week_start)
     except Exception:
-        logger.exception("Backfill failed for trip %s", trip_id)
+        logger.exception(
+            "Backfill failed for trip %s week %s", trip_id, week_start
+        )
+
+
+def _enqueue_dual_week_backfill(
+    trip_id: int, background_tasks: BackgroundTasks
+) -> None:
+    """Schedule background backfills for *both* the current and next week.
+
+    Called after a trip create or address-changing edit so the new/edited
+    trip immediately participates in the "two weeks always visible"
+    invariant the weekly Mon-01:00 cron maintains for everyone else.
+    Per-mutation cost: ~1,680 Routes Matrix calls (~$16.80).
+    """
+    background_tasks.add_task(_kickoff_backfill, trip_id, current_week_start())
+    background_tasks.add_task(_kickoff_backfill, trip_id, next_week_start())
 
 
 def _validate_addresses_or_400(
@@ -164,18 +200,19 @@ def _ensure_current_week_backfill(
     This catches two cases that otherwise leave the heatmap stuck on
     "Building… 0 / 0 (0%)" forever:
 
-      1. Old trips viewed after a Monday rollover before the Friday cron
+      1. Old trips viewed after a Monday rollover before the weekly cron
          has populated the new week.
-      2. Local dev, where the scheduler is disabled so the Friday cron
+      2. Local dev, where the scheduler is disabled so the weekly cron
          never runs at all.
 
     The underlying backfill is idempotent (ON DUPLICATE KEY for slot
     seeding, skip-if-already-filled for the provider loop), so a
     redundant call when samples already exist is a cheap no-op.
     """
-    status_dict = sample_status_for_trip(trip_id, current_week_start())
+    week_start = current_week_start()
+    status_dict = sample_status_for_trip(trip_id, week_start)
     if status_dict["total"] == 0:
-        background_tasks.add_task(_kickoff_backfill, trip_id)
+        background_tasks.add_task(_kickoff_backfill, trip_id, week_start)
 
 
 @trips_router.get("", response_model=list[TripOut])
@@ -284,19 +321,19 @@ async def create_my_trip(
             trip.id,
         )
 
-    background_tasks.add_task(_kickoff_backfill, trip.id)
+    _enqueue_dual_week_backfill(trip.id, background_tasks)
     return TripDetail(**_trip_to_out(trip).model_dump(), backfill=_backfill_for(trip.id))
 
 
-@trips_router.get("/{trip_id}", response_model=TripDetail)
+@trips_router.get("/{slug}", response_model=TripDetail)
 async def get_my_trip(
-    trip_id: int,
+    slug: str,
     background_tasks: BackgroundTasks,
     user: User = Depends(get_current_user),
 ) -> TripDetail:
     """Return a single trip owned by the caller."""
     try:
-        trip = get_trip_for_user(trip_id=trip_id, user_id=user.id)
+        trip = get_trip_for_user_by_slug(slug=slug, user_id=user.id)
     except TripNotFoundError as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Trip not found"
@@ -305,9 +342,9 @@ async def get_my_trip(
     return TripDetail(**_trip_to_out(trip).model_dump(), backfill=_backfill_for(trip.id))
 
 
-@trips_router.patch("/{trip_id}", response_model=TripDetail)
+@trips_router.patch("/{slug}", response_model=TripDetail)
 async def update_my_trip(
-    trip_id: int,
+    slug: str,
     body: TripPatch,
     background_tasks: BackgroundTasks,
     user: User = Depends(get_current_user),
@@ -326,7 +363,7 @@ async def update_my_trip(
     # and the Geocoding pre-flight should both fire ONLY for true address
     # mutations — a name-only rename is free, by design.
     try:
-        current_trip = get_trip_for_user(trip_id=trip_id, user_id=user.id)
+        current_trip = get_trip_for_user_by_slug(slug=slug, user_id=user.id)
     except TripNotFoundError as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Trip not found"
@@ -391,7 +428,7 @@ async def update_my_trip(
 
     try:
         trip, addresses_changed = update_trip(
-            trip_id=trip_id,
+            trip_id=current_trip.id,
             user_id=user.id,
             name=None if body.clear_name else (body.name if body.name is not None else _UNSET),
             origin_address=new_origin,
@@ -417,53 +454,75 @@ async def update_my_trip(
                 user.id,
                 trip.id,
             )
-        background_tasks.add_task(_kickoff_backfill, trip.id)
+        _enqueue_dual_week_backfill(trip.id, background_tasks)
 
     return TripDetail(**_trip_to_out(trip).model_dump(), backfill=_backfill_for(trip.id))
 
 
-@trips_router.delete("/{trip_id}", status_code=status.HTTP_204_NO_CONTENT)
+@trips_router.delete("/{slug}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_my_trip(
-    trip_id: int, user: User = Depends(get_current_user)
+    slug: str, user: User = Depends(get_current_user)
 ) -> None:
     """Soft-delete a trip. Samples stay until the next cleanup."""
     try:
-        soft_delete_trip(trip_id=trip_id, user_id=user.id)
+        trip = get_trip_for_user_by_slug(slug=slug, user_id=user.id)
+        soft_delete_trip(trip_id=trip.id, user_id=user.id)
     except TripNotFoundError as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Trip not found"
         ) from exc
 
 
-@trips_router.get("/{trip_id}/heatmap")
+@trips_router.get("/{slug}/heatmap")
 async def get_trip_heatmap(
-    trip_id: int, user: User = Depends(get_current_user)
+    slug: str,
+    week: WeekParam = Query("current"),
+    user: User = Depends(get_current_user),
 ) -> dict:
-    """Return the heatmap payload for this trip's current week."""
+    """Return the heatmap payload for this trip's current or next week.
+
+    `next_week_available` is included on every response so the SPA can
+    decide whether to show the next-week toggle even when the request
+    is for the current week.
+    """
     try:
-        get_trip_for_user(trip_id=trip_id, user_id=user.id)
+        trip = get_trip_for_user_by_slug(slug=slug, user_id=user.id)
     except TripNotFoundError as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Trip not found"
         ) from exc
-    return get_heatmap_for_trip(trip_id, current_week_start())
+    payload = get_heatmap_for_trip(trip.id, _resolve_week(week))
+    payload["next_week_available"] = is_week_fully_populated(
+        trip.id, next_week_start()
+    )
+    return payload
 
 
-@trips_router.get("/{trip_id}/backfill-status", response_model=BackfillStatus)
+@trips_router.get("/{slug}/backfill-status", response_model=BackfillStatus)
 async def get_trip_backfill_status(
-    trip_id: int,
+    slug: str,
     background_tasks: BackgroundTasks,
+    week: WeekParam = Query("current"),
     user: User = Depends(get_current_user),
 ) -> BackfillStatus:
-    """How much of the current week has been sampled so far."""
+    """How much of the requested week has been sampled so far.
+
+    For `week=current` we lazily kick off a backfill if no samples
+    exist yet (self-healing for old trips after a Monday rollover or
+    in local dev where the cron is disabled). For `week=next` we
+    deliberately don't auto-backfill — the only legitimate writers
+    for next week are the weekly cron and the dual-week kickoff that
+    runs at trip create / address-edit time.
+    """
     try:
-        get_trip_for_user(trip_id=trip_id, user_id=user.id)
+        trip = get_trip_for_user_by_slug(slug=slug, user_id=user.id)
     except TripNotFoundError as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Trip not found"
         ) from exc
-    _ensure_current_week_backfill(trip_id, background_tasks)
-    return _backfill_for(trip_id)
+    if week == "current":
+        _ensure_current_week_backfill(trip.id, background_tasks)
+    return _backfill_for(trip.id, _resolve_week(week))
 
 
 __all__ = ["trips_router"]

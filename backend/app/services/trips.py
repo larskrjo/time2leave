@@ -8,10 +8,13 @@ stay focused on HTTP-level concerns.
 
 from __future__ import annotations
 
+import secrets
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from typing import Literal
 from zoneinfo import ZoneInfo
+
+from mysql.connector import Error as MySQLError
 
 from app.db.db import Database
 
@@ -24,7 +27,16 @@ WEEKDAY_NUM_TO_LABEL = dict(enumerate(WEEKDAY_ORDER))
 
 @dataclass(frozen=True)
 class Trip:
+    """In-memory view of one row of the `trips` table.
+
+    `id` is the internal int PK that `commute_samples.trip_id` and
+    `trip_mutation_log.trip_id` foreign-key against — never exposed
+    to the SPA. `slug` is the public 10-hex-char identifier used in
+    URLs, API responses, and anywhere else a user/admin might see it.
+    """
+
     id: int
+    slug: str
     user_id: int
     name: str | None
     origin_address: str
@@ -57,12 +69,34 @@ def current_week_start(today: date | None = None) -> date:
     return today - timedelta(days=today.weekday())
 
 
+def next_week_start(today: date | None = None) -> date:
+    """Return the Monday of the week *after* the one containing `today` (Pacific)."""
+    return current_week_start(today) + timedelta(days=7)
+
+
+def is_week_fully_populated(trip_id: int, week_start: date) -> bool:
+    """True iff every commute_samples row for this trip+week has a duration.
+
+    Used by the heatmap endpoint to decide whether to flag next-week
+    data as available to the SPA. A "fully populated" week is one
+    where every slot the data-gathering job seeded got a non-null
+    `duration_seconds` back from the provider.
+    """
+    s = sample_status_for_trip(trip_id, week_start)
+    return bool(s["total"] > 0 and s["ready"] == s["total"])
+
+
+_TRIP_COLUMNS = (
+    "id, slug, user_id, name, origin_address, destination_address, created_at"
+)
+
+
 def list_trips_for_user(user_id: int) -> list[Trip]:
     """All of a user's active (non-deleted) trips, newest first."""
     with Database() as cursor:
         cursor.execute(
-            """
-            SELECT id, user_id, name, origin_address, destination_address, created_at
+            f"""
+            SELECT {_TRIP_COLUMNS}
             FROM trips
             WHERE user_id = %s AND deleted_at IS NULL
             ORDER BY created_at DESC, id DESC
@@ -93,11 +127,19 @@ def count_trips_total() -> int:
 
 
 def get_trip_for_user(*, trip_id: int, user_id: int) -> Trip:
-    """Fetch a trip belonging to `user_id`; 404-style error otherwise."""
+    """Fetch a trip by *internal int id*; 404-style error otherwise.
+
+    Used for code paths that already have an int id in hand (typically
+    after resolving a slug at the API boundary, or from the
+    self-referential update path that wants to confirm ownership before
+    writing). External / SPA-facing lookups should go through
+    `get_trip_for_user_by_slug` so the int id never has to leave the
+    backend.
+    """
     with Database() as cursor:
         cursor.execute(
-            """
-            SELECT id, user_id, name, origin_address, destination_address, created_at
+            f"""
+            SELECT {_TRIP_COLUMNS}
             FROM trips
             WHERE id = %s AND user_id = %s AND deleted_at IS NULL
             """,
@@ -109,6 +151,40 @@ def get_trip_for_user(*, trip_id: int, user_id: int) -> Trip:
     return _row_to_trip(row)
 
 
+def get_trip_for_user_by_slug(*, slug: str, user_id: int) -> Trip:
+    """Fetch a trip by its *public slug*. Primary lookup for the API layer.
+
+    Slugs are the only trip identifier the SPA / URL bar ever sees, so
+    every authenticated user-facing handler resolves through here. The
+    int id is then used for FK-bound internals (commute_samples,
+    trip_mutation_log, the data-gathering job).
+    """
+    with Database() as cursor:
+        cursor.execute(
+            f"""
+            SELECT {_TRIP_COLUMNS}
+            FROM trips
+            WHERE slug = %s AND user_id = %s AND deleted_at IS NULL
+            """,
+            (slug, user_id),
+        )
+        row = cursor.fetchone()
+    if row is None:
+        raise TripNotFoundError(
+            f"Trip slug={slug!r} not found for user {user_id}"
+        )
+    return _row_to_trip(row)
+
+
+_SLUG_HEX_BYTES = 5  # 5 bytes → 10 hex chars (e.g. "a1b2c3d4e5").
+_MAX_SLUG_RETRIES = 8
+
+
+def _generate_slug() -> str:
+    """One fresh random 10-char hex slug (~40 bits of entropy)."""
+    return secrets.token_hex(_SLUG_HEX_BYTES)
+
+
 def create_trip(
     *,
     user_id: int,
@@ -118,7 +194,13 @@ def create_trip(
     per_user_cap: int,
     total_cap: int,
 ) -> Trip:
-    """Insert a new trip after checking caps. Raises `TripQuotaExceededError`."""
+    """Insert a new trip after checking caps. Raises `TripQuotaExceededError`.
+
+    The trip's public slug is generated here at insert time, with a
+    retry loop on the (statistically near-impossible) UNIQUE collision.
+    Cap checks fire first so a cap-blocked user doesn't even consume
+    a generation cycle.
+    """
     if count_trips_for_user(user_id) >= per_user_cap:
         raise TripQuotaExceededError(
             f"Per-user trip cap of {per_user_cap} reached"
@@ -129,20 +211,31 @@ def create_trip(
         )
 
     with Database() as cursor:
-        cursor.execute(
-            """
-            INSERT INTO trips
-                (user_id, name, origin_address, destination_address)
-            VALUES (%s, %s, %s, %s)
-            """,
-            (user_id, name, origin_address, destination_address),
-        )
+        for _ in range(_MAX_SLUG_RETRIES):
+            slug = _generate_slug()
+            try:
+                cursor.execute(
+                    """
+                    INSERT INTO trips
+                        (slug, user_id, name, origin_address, destination_address)
+                    VALUES (%s, %s, %s, %s, %s)
+                    """,
+                    (slug, user_id, name, origin_address, destination_address),
+                )
+                break
+            except MySQLError as exc:
+                # 1062 = duplicate-key. Try a different slug.
+                if getattr(exc, "errno", None) != 1062:
+                    raise
+        else:
+            raise RuntimeError(
+                "Exhausted slug-generation retries; "
+                "is the slug column constrained correctly?"
+            )
+
         new_id = cursor.lastrowid
         cursor.execute(
-            """
-            SELECT id, user_id, name, origin_address, destination_address, created_at
-            FROM trips WHERE id = %s
-            """,
+            f"SELECT {_TRIP_COLUMNS} FROM trips WHERE id = %s",
             (new_id,),
         )
         row = cursor.fetchone()
@@ -267,8 +360,8 @@ def list_active_trips() -> list[Trip]:
     """Every non-deleted trip in the system (used by the weekly job)."""
     with Database() as cursor:
         cursor.execute(
-            """
-            SELECT id, user_id, name, origin_address, destination_address, created_at
+            f"""
+            SELECT {_TRIP_COLUMNS}
             FROM trips
             WHERE deleted_at IS NULL
             ORDER BY id
@@ -346,11 +439,13 @@ def get_heatmap_for_trip(trip_id: int, week_start: date) -> dict:
 
 
 def _row_to_trip(row: tuple) -> Trip:
+    """Materialize a Trip from a row that follows `_TRIP_COLUMNS` order."""
     return Trip(
         id=int(row[0]),
-        user_id=int(row[1]),
-        name=row[2],
-        origin_address=row[3],
-        destination_address=row[4],
-        created_at=row[5],
+        slug=str(row[1]),
+        user_id=int(row[2]),
+        name=row[3],
+        origin_address=row[4],
+        destination_address=row[5],
+        created_at=row[6],
     )

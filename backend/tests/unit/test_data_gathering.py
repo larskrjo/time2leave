@@ -134,6 +134,7 @@ def test_duration_string_parsing() -> None:
 def test_origin_destination_flips_for_return() -> None:
     trip = Trip(
         id=1,
+        slug="slug-00001",
         user_id=1,
         name=None,
         origin_address="A",
@@ -174,6 +175,7 @@ def test_plan_and_run_enforces_ceiling(
     settings = _settings(max_weekly_routes_calls=500)
     trip = Trip(
         id=1,
+        slug="slug-00001",
         user_id=1,
         name="T",
         origin_address="A",
@@ -227,6 +229,7 @@ class TestFillInSlotsAbortsOnSoftDelete:
     def _trip() -> Trip:
         return Trip(
             id=42,
+            slug="slug-00042",
             user_id=1,
             name="T",
             origin_address="A",
@@ -388,6 +391,7 @@ def test_plan_and_run_bypasses_ceiling_for_backfill(
     settings = _settings(max_weekly_routes_calls=1)
     trip = Trip(
         id=7,
+        slug="slug-00007",
         user_id=1,
         name="T",
         origin_address="A",
@@ -423,3 +427,128 @@ def test_plan_and_run_bypasses_ceiling_for_backfill(
 
     assert upserts == [7]
     assert fills == [7]
+
+
+class _NoopProvider:
+    """Implements `CommuteProvider` for tests that never actually fetch."""
+
+    def fetch(self, *_args, **_kwargs):
+        from app.job.providers import CommuteResult
+
+        return CommuteResult(
+            distance_meters=0,
+            duration="0s",
+            condition=None,
+            status_code="OK",
+            status_message=None,
+        )
+
+
+class TestBackfillTripForWeek:
+    """`backfill_trip_for_week` dispatches `_plan_and_run` for the given week.
+
+    Used both by the API layer (which fires it for the current AND next
+    week on each billed mutation) and by the legacy
+    `backfill_trip_current_week` wrapper.
+    """
+
+    @staticmethod
+    def _stub_db_with_trip(monkeypatch: pytest.MonkeyPatch) -> None:
+        class _Cursor:
+            def __init__(self) -> None:
+                self.rowcount = 1
+                # Matches the SELECT order in data_gathering.backfill_trip_for_week:
+                # id, slug, user_id, name, origin_address, destination_address, created_at
+                self._row = (7, "slug-00007", 1, "T", "A", "B", None)
+
+            def execute(self, *_args, **_kw) -> None:
+                pass
+
+            def fetchone(self):
+                return self._row
+
+        class _DB:
+            def __enter__(self_inner):
+                return _Cursor()
+
+            def __exit__(self_inner, *exc) -> None:
+                return None
+
+        monkeypatch.setattr(dg, "Database", _DB)
+
+    def test_targets_the_caller_specified_week(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._stub_db_with_trip(monkeypatch)
+
+        plan_calls: list[date] = []
+
+        def fake_plan(*, trips, week_start, **_kw):  # noqa: ARG001
+            plan_calls.append(week_start)
+
+        monkeypatch.setattr(dg, "_plan_and_run", fake_plan)
+
+        target = date(2025, 12, 8)
+        dg.backfill_trip_for_week(
+            7, target, provider=_NoopProvider(), settings=_settings()
+        )
+
+        assert plan_calls == [target]
+
+    def test_unknown_trip_is_a_logged_noop(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        class _Cursor:
+            rowcount = 0
+
+            def execute(self, *_args, **_kw) -> None:
+                pass
+
+            def fetchone(self):
+                return None
+
+        class _DB:
+            def __enter__(self_inner):
+                return _Cursor()
+
+            def __exit__(self_inner, *exc) -> None:
+                return None
+
+        monkeypatch.setattr(dg, "Database", _DB)
+
+        called: list[date] = []
+
+        def fake_plan(*, week_start, **_kw):  # noqa: ARG001
+            called.append(week_start)
+
+        monkeypatch.setattr(dg, "_plan_and_run", fake_plan)
+
+        with caplog.at_level("WARNING"):
+            dg.backfill_trip_for_week(
+                999,
+                date(2025, 12, 8),
+                provider=_NoopProvider(),
+                settings=_settings(),
+            )
+
+        assert called == []
+        assert any("not found" in rec.message for rec in caplog.records)
+
+    def test_legacy_wrapper_still_targets_current_week(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """`backfill_trip_current_week` is the API-compatible older entrypoint."""
+        self._stub_db_with_trip(monkeypatch)
+
+        plan_calls: list[date] = []
+
+        def fake_plan(*, week_start, **_kw):  # noqa: ARG001
+            plan_calls.append(week_start)
+
+        monkeypatch.setattr(dg, "_plan_and_run", fake_plan)
+
+        dg.backfill_trip_current_week(
+            7, provider=_NoopProvider(), settings=_settings()
+        )
+
+        assert plan_calls == [dg.current_week_monday()]

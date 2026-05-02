@@ -17,10 +17,11 @@ export const API = {
     authConfig: `${BASE_URL}/api/v1/auth/config`,
     trips: `${BASE_URL}/api/v1/trips`,
     tripQuota: `${BASE_URL}/api/v1/trips/quota`,
-    trip: (id: number | string) => `${BASE_URL}/api/v1/trips/${id}`,
-    tripHeatmap: (id: number | string) =>
-        `${BASE_URL}/api/v1/trips/${id}/heatmap`,
-    tripBackfillStatus: (id: number | string) =>
+    // Trip identifiers are 10-hex-char public slugs (e.g. "a1b2c3d4e5"),
+    // not auto-incrementing integers — see TripSummary.id in lib/trips.ts.
+    trip: (id: string) => `${BASE_URL}/api/v1/trips/${id}`,
+    tripHeatmap: (id: string) => `${BASE_URL}/api/v1/trips/${id}/heatmap`,
+    tripBackfillStatus: (id: string) =>
         `${BASE_URL}/api/v1/trips/${id}/backfill-status`,
     adminAllowlist: `${BASE_URL}/api/v1/admin/allowlist`,
     adminAllowlistEntry: (email: string) =>
@@ -31,6 +32,6 @@ export const ROUTES = {
     splash: "/",
     trips: "/trips",
     newTrip: "/trips/new",
-    trip: (id: number | string) => `/trips/${id}`,
+    trip: (id: string) => `/trips/${id}`,
     adminAllowlist: "/admin/allowlist",
 } as const;

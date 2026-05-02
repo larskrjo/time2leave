@@ -30,6 +30,33 @@ def logged_in_user() -> User:
     )
 
 
+def _make_trip(
+    *,
+    id: int,
+    user_id: int = 99,
+    name: str | None = "x",
+    origin_address: str = "A",
+    destination_address: str = "B",
+    created_at: datetime | None = None,
+    slug: str | None = None,
+) -> Trip:
+    """Build a Trip for fixtures with a defaulted, predictable slug.
+
+    Slug defaults to `slug-{id:05d}` so tests can address the trip by
+    its public identifier without hard-coding random hex everywhere
+    while still exercising the slug-based lookup paths end-to-end.
+    """
+    return Trip(
+        id=id,
+        slug=slug or f"slug-{id:05d}",
+        user_id=user_id,
+        name=name,
+        origin_address=origin_address,
+        destination_address=destination_address,
+        created_at=created_at,
+    )
+
+
 @pytest.fixture
 def fake_trips_store() -> dict[int, Trip]:
     return {}
@@ -42,11 +69,35 @@ def fake_mutation_log() -> list[dict]:
 
 
 @pytest.fixture
+def fake_backfill_kickoffs() -> list[tuple[int, str]]:
+    """Captured `(trip_id, week_start.isoformat())` from background backfills.
+
+    Lets tests assert that a trip create/edit fires backfills for both
+    the current and next week (and that ?week=next on backfill-status
+    does NOT enqueue anything).
+    """
+    return []
+
+
+@pytest.fixture
+def fake_next_week_available() -> dict[str, bool]:
+    """Mutable container so tests can flip `is_week_fully_populated`.
+
+    Default is False (matches a fresh trip); tests that want to verify
+    the toggle-visible path set `state["value"] = True` before hitting
+    the heatmap endpoint.
+    """
+    return {"value": False}
+
+
+@pytest.fixture
 def patched_app(
     monkeypatch: pytest.MonkeyPatch,
     logged_in_user: User,
     fake_trips_store: dict[int, Trip],
     fake_mutation_log: list[dict],
+    fake_backfill_kickoffs: list[tuple[int, str]],
+    fake_next_week_available: dict[str, bool],
 ) -> Iterator[TestClient]:
     monkeypatch.setenv("APP_ENV", "local")
     from app.config import reset_settings_cache
@@ -56,11 +107,11 @@ def patched_app(
     def fake_list(user_id: int) -> list[Trip]:
         return [t for t in fake_trips_store.values() if t.user_id == user_id]
 
-    def fake_get(*, trip_id: int, user_id: int) -> Trip:
-        trip = fake_trips_store.get(trip_id)
-        if not trip or trip.user_id != user_id:
-            raise TripNotFoundError("not found")
-        return trip
+    def fake_get_by_slug(*, slug: str, user_id: int) -> Trip:
+        for trip in fake_trips_store.values():
+            if trip.slug == slug and trip.user_id == user_id:
+                return trip
+        raise TripNotFoundError("not found")
 
     next_id = {"value": 1}
 
@@ -72,8 +123,9 @@ def patched_app(
             raise TripQuotaExceededError("per-user")
         if len(fake_trips_store) >= total_cap:
             raise TripQuotaExceededError("total")
-        trip = Trip(
-            id=next_id["value"],
+        new_id = next_id["value"]
+        trip = _make_trip(
+            id=new_id,
             user_id=user_id,
             name=name,
             origin_address=origin_address,
@@ -120,8 +172,9 @@ def patched_app(
             new_origin != trip.origin_address
             or new_destination != trip.destination_address
         )
-        updated = Trip(
+        updated = _make_trip(
             id=trip.id,
+            slug=trip.slug,
             user_id=trip.user_id,
             name=new_name,
             origin_address=new_origin,
@@ -178,7 +231,9 @@ def patched_app(
         )
 
     monkeypatch.setattr(trips_api_mod, "list_trips_for_user", fake_list)
-    monkeypatch.setattr(trips_api_mod, "get_trip_for_user", fake_get)
+    monkeypatch.setattr(
+        trips_api_mod, "get_trip_for_user_by_slug", fake_get_by_slug
+    )
     monkeypatch.setattr(trips_api_mod, "create_trip", fake_create)
     monkeypatch.setattr(trips_api_mod, "soft_delete_trip", fake_soft_delete)
     monkeypatch.setattr(trips_api_mod, "update_trip", fake_update)
@@ -190,8 +245,23 @@ def patched_app(
         trips_api_mod, "mutation_quota_for_user", fake_mutation_quota
     )
     monkeypatch.setattr(trips_api_mod, "record_mutation", fake_record_mutation)
-    # Prevent the background backfill from touching anything real.
-    monkeypatch.setattr(trips_api_mod, "_kickoff_backfill", lambda _id: None)
+
+    # Prevent the background backfill from touching anything real, and
+    # capture every (trip_id, week_start) pair that gets enqueued so
+    # tests can assert the dual-week behavior.
+    def fake_kickoff(trip_id: int, week_start) -> None:
+        fake_backfill_kickoffs.append((trip_id, week_start.isoformat()))
+
+    monkeypatch.setattr(trips_api_mod, "_kickoff_backfill", fake_kickoff)
+
+    # `is_week_fully_populated` lives in `services.trips` and is imported
+    # into `trips_api`. We patch the imported reference so the heatmap
+    # endpoint sees the value tests set, without touching the DB.
+    monkeypatch.setattr(
+        trips_api_mod,
+        "is_week_fully_populated",
+        lambda _trip_id, _week_start: fake_next_week_available["value"],
+    )
 
     from app.main import create_app
 
@@ -230,7 +300,10 @@ def test_create_trip_returns_backfill_status(patched_app: TestClient) -> None:
     )
     assert r.status_code == 201
     body = r.json()
-    assert body["id"] == 1
+    # `id` is now the public 10-hex slug (string), not the int PK.
+    # `_make_trip` defaults the slug from the int id used by the
+    # in-memory store (`slug-00001` for the first inserted trip).
+    assert body["id"] == "slug-00001"
     assert body["name"] == "Commute"
     assert body["backfill"] == {
         "total": 840,
@@ -260,7 +333,7 @@ def test_create_trip_enforces_per_user_cap(
 
     limit = get_settings().max_trips_per_user
     for i in range(limit):
-        fake_trips_store[i + 1] = Trip(
+        fake_trips_store[i + 1] = _make_trip(
             id=i + 1,
             user_id=99,
             name=f"T{i}",
@@ -345,7 +418,7 @@ def test_get_trip_unknown_id_404s(patched_app: TestClient) -> None:
 def test_delete_trip_removes_it(
     patched_app: TestClient, fake_trips_store: dict[int, Trip]
 ) -> None:
-    fake_trips_store[1] = Trip(
+    fake_trips_store[1] = _make_trip(
         id=1,
         user_id=99,
         name="x",
@@ -353,7 +426,7 @@ def test_delete_trip_removes_it(
         destination_address="b",
         created_at=None,
     )
-    r = patched_app.delete("/api/v1/trips/1")
+    r = patched_app.delete("/api/v1/trips/slug-00001")
     assert r.status_code == 204
     assert 1 not in fake_trips_store
 
@@ -361,7 +434,7 @@ def test_delete_trip_removes_it(
 def test_heatmap_returns_expected_shape(
     patched_app: TestClient, fake_trips_store: dict[int, Trip]
 ) -> None:
-    fake_trips_store[1] = Trip(
+    fake_trips_store[1] = _make_trip(
         id=1,
         user_id=99,
         name="x",
@@ -369,7 +442,7 @@ def test_heatmap_returns_expected_shape(
         destination_address="b",
         created_at=None,
     )
-    r = patched_app.get("/api/v1/trips/1/heatmap")
+    r = patched_app.get("/api/v1/trips/slug-00001/heatmap")
     assert r.status_code == 200
     body = r.json()
     assert set(body.keys()) >= {"outbound", "return", "week_start_date", "weekdays"}
@@ -379,7 +452,7 @@ def test_heatmap_returns_expected_shape(
 def test_quota_endpoint_reports_used_and_limit(
     patched_app: TestClient, fake_trips_store: dict[int, Trip]
 ) -> None:
-    fake_trips_store[1] = Trip(
+    fake_trips_store[1] = _make_trip(
         id=1,
         user_id=99,
         name="x",
@@ -397,7 +470,7 @@ def test_quota_endpoint_reports_used_and_limit(
 def test_patch_trip_renames_without_touching_addresses(
     patched_app: TestClient, fake_trips_store: dict[int, Trip]
 ) -> None:
-    fake_trips_store[1] = Trip(
+    fake_trips_store[1] = _make_trip(
         id=1,
         user_id=99,
         name="old",
@@ -405,7 +478,7 @@ def test_patch_trip_renames_without_touching_addresses(
         destination_address="200 Oak Ave",
         created_at=None,
     )
-    r = patched_app.patch("/api/v1/trips/1", json={"name": "renamed"})
+    r = patched_app.patch("/api/v1/trips/slug-00001", json={"name": "renamed"})
     assert r.status_code == 200
     body = r.json()
     assert body["name"] == "renamed"
@@ -415,7 +488,7 @@ def test_patch_trip_renames_without_touching_addresses(
 def test_patch_trip_swap_flips_origin_and_destination(
     patched_app: TestClient, fake_trips_store: dict[int, Trip]
 ) -> None:
-    fake_trips_store[1] = Trip(
+    fake_trips_store[1] = _make_trip(
         id=1,
         user_id=99,
         name="x",
@@ -423,7 +496,7 @@ def test_patch_trip_swap_flips_origin_and_destination(
         destination_address="200 Oak Ave",
         created_at=None,
     )
-    r = patched_app.patch("/api/v1/trips/1", json={"swap_addresses": True})
+    r = patched_app.patch("/api/v1/trips/slug-00001", json={"swap_addresses": True})
     assert r.status_code == 200
     body = r.json()
     assert body["origin_address"] == "200 Oak Ave"
@@ -433,7 +506,7 @@ def test_patch_trip_swap_flips_origin_and_destination(
 def test_patch_trip_clear_name_sets_it_to_null(
     patched_app: TestClient, fake_trips_store: dict[int, Trip]
 ) -> None:
-    fake_trips_store[1] = Trip(
+    fake_trips_store[1] = _make_trip(
         id=1,
         user_id=99,
         name="had a name",
@@ -441,7 +514,7 @@ def test_patch_trip_clear_name_sets_it_to_null(
         destination_address="b st",
         created_at=None,
     )
-    r = patched_app.patch("/api/v1/trips/1", json={"clear_name": True})
+    r = patched_app.patch("/api/v1/trips/slug-00001", json={"clear_name": True})
     assert r.status_code == 200
     assert r.json()["name"] is None
 
@@ -449,7 +522,7 @@ def test_patch_trip_clear_name_sets_it_to_null(
 def test_patch_trip_rejects_same_origin_destination(
     patched_app: TestClient, fake_trips_store: dict[int, Trip]
 ) -> None:
-    fake_trips_store[1] = Trip(
+    fake_trips_store[1] = _make_trip(
         id=1,
         user_id=99,
         name="x",
@@ -458,7 +531,7 @@ def test_patch_trip_rejects_same_origin_destination(
         created_at=None,
     )
     r = patched_app.patch(
-        "/api/v1/trips/1",
+        "/api/v1/trips/slug-00001",
         json={"origin_address": "same addr", "destination_address": "same addr"},
     )
     assert r.status_code == 400
@@ -544,7 +617,7 @@ def test_patch_trip_validates_only_changed_origin(
     fake_trips_store: dict[int, Trip],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    fake_trips_store[1] = Trip(
+    fake_trips_store[1] = _make_trip(
         id=1,
         user_id=99,
         name="x",
@@ -554,7 +627,7 @@ def test_patch_trip_validates_only_changed_origin(
     )
     stub = _install_validator(monkeypatch, invalid={"junk"})
     r = patched_app.patch(
-        "/api/v1/trips/1",
+        "/api/v1/trips/slug-00001",
         json={"origin_address": "junk"},
     )
     assert r.status_code == 400
@@ -568,7 +641,7 @@ def test_patch_trip_skips_validation_when_addresses_unchanged(
     fake_trips_store: dict[int, Trip],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    fake_trips_store[1] = Trip(
+    fake_trips_store[1] = _make_trip(
         id=1,
         user_id=99,
         name="x",
@@ -578,7 +651,7 @@ def test_patch_trip_skips_validation_when_addresses_unchanged(
     )
     stub = _install_validator(monkeypatch, invalid=set())
     r = patched_app.patch(
-        "/api/v1/trips/1",
+        "/api/v1/trips/slug-00001",
         json={
             "origin_address": "100 Main St",
             "destination_address": "200 Oak Ave",
@@ -594,7 +667,7 @@ def test_patch_trip_swap_skips_validation(
     fake_trips_store: dict[int, Trip],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    fake_trips_store[1] = Trip(
+    fake_trips_store[1] = _make_trip(
         id=1,
         user_id=99,
         name="x",
@@ -607,7 +680,7 @@ def test_patch_trip_swap_skips_validation(
     stub = _install_validator(
         monkeypatch, invalid={"100 Main St", "200 Oak Ave"}
     )
-    r = patched_app.patch("/api/v1/trips/1", json={"swap_addresses": True})
+    r = patched_app.patch("/api/v1/trips/slug-00001", json={"swap_addresses": True})
     assert r.status_code == 200
     assert stub.calls == []
 
@@ -677,7 +750,7 @@ def test_patch_name_only_does_not_count(
     fake_trips_store: dict[int, Trip],
     fake_mutation_log: list[dict],
 ) -> None:
-    fake_trips_store[1] = Trip(
+    fake_trips_store[1] = _make_trip(
         id=1,
         user_id=99,
         name="x",
@@ -685,7 +758,7 @@ def test_patch_name_only_does_not_count(
         destination_address="200 Oak Ave",
         created_at=None,
     )
-    r = patched_app.patch("/api/v1/trips/1", json={"name": "Renamed"})
+    r = patched_app.patch("/api/v1/trips/slug-00001", json={"name": "Renamed"})
     assert r.status_code == 200
     # Name-only patch is free; mutation log untouched.
     assert fake_mutation_log == []
@@ -697,7 +770,7 @@ def test_patch_address_change_logs_a_mutation(
     fake_mutation_log: list[dict],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    fake_trips_store[1] = Trip(
+    fake_trips_store[1] = _make_trip(
         id=1,
         user_id=99,
         name="x",
@@ -707,7 +780,7 @@ def test_patch_address_change_logs_a_mutation(
     )
     _install_validator(monkeypatch, invalid=set())
     r = patched_app.patch(
-        "/api/v1/trips/1", json={"origin_address": "999 Different St"}
+        "/api/v1/trips/slug-00001", json={"origin_address": "999 Different St"}
     )
     assert r.status_code == 200
     assert len(fake_mutation_log) == 1
@@ -719,7 +792,7 @@ def test_patch_swap_logs_a_mutation(
     fake_trips_store: dict[int, Trip],
     fake_mutation_log: list[dict],
 ) -> None:
-    fake_trips_store[1] = Trip(
+    fake_trips_store[1] = _make_trip(
         id=1,
         user_id=99,
         name="x",
@@ -727,7 +800,7 @@ def test_patch_swap_logs_a_mutation(
         destination_address="200 Oak Ave",
         created_at=None,
     )
-    r = patched_app.patch("/api/v1/trips/1", json={"swap_addresses": True})
+    r = patched_app.patch("/api/v1/trips/slug-00001", json={"swap_addresses": True})
     assert r.status_code == 200
     assert len(fake_mutation_log) == 1
     assert fake_mutation_log[0]["kind"] == "swap"
@@ -744,7 +817,7 @@ def test_patch_address_change_429_when_at_cap(
 
     reset_settings_cache()
 
-    fake_trips_store[1] = Trip(
+    fake_trips_store[1] = _make_trip(
         id=1,
         user_id=99,
         name="x",
@@ -761,7 +834,7 @@ def test_patch_address_change_429_when_at_cap(
 
     stub = _install_validator(monkeypatch, invalid=set())
     r = patched_app.patch(
-        "/api/v1/trips/1", json={"origin_address": "C is different"}
+        "/api/v1/trips/slug-00001", json={"origin_address": "C is different"}
     )
     assert r.status_code == 429
     # Crucially: we 429 *before* paying for Geocoding.
@@ -773,7 +846,7 @@ def test_delete_trip_does_not_consume_mutation(
     fake_trips_store: dict[int, Trip],
     fake_mutation_log: list[dict],
 ) -> None:
-    fake_trips_store[1] = Trip(
+    fake_trips_store[1] = _make_trip(
         id=1,
         user_id=99,
         name="x",
@@ -781,6 +854,238 @@ def test_delete_trip_does_not_consume_mutation(
         destination_address="B",
         created_at=None,
     )
-    r = patched_app.delete("/api/v1/trips/1")
+    r = patched_app.delete("/api/v1/trips/slug-00001")
     assert r.status_code == 204
     assert fake_mutation_log == []
+
+
+# ---------------------------------------------------------------------------
+# Dual-week backfill on create / address edit + ?week= query parameter
+# ---------------------------------------------------------------------------
+
+
+def test_create_trip_backfills_both_current_and_next_week(
+    patched_app: TestClient,
+    fake_backfill_kickoffs: list[tuple[int, str]],
+) -> None:
+    """A trip create should enqueue backfills for *both* weeks.
+
+    This is what gives the user immediate access to the next-week
+    toggle without waiting for the next Monday-01:00 cron.
+    """
+    from app.services.trips import current_week_start, next_week_start
+
+    r = patched_app.post(
+        "/api/v1/trips",
+        json={
+            "origin_address": "100 Main St",
+            "destination_address": "200 Oak Ave",
+        },
+    )
+    assert r.status_code == 201
+
+    # The kickoff list captures (int trip_id, week) pairs; the create
+    # in this test produces exactly one trip, so all entries belong to
+    # it. Just assert the set of weeks is right.
+    weeks = sorted(week for _tid, week in fake_backfill_kickoffs)
+    assert weeks == sorted(
+        [current_week_start().isoformat(), next_week_start().isoformat()]
+    )
+
+
+def test_patch_address_change_backfills_both_weeks(
+    patched_app: TestClient,
+    fake_trips_store: dict[int, Trip],
+    fake_backfill_kickoffs: list[tuple[int, str]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_trips_store[1] = _make_trip(
+        id=1,
+        user_id=99,
+        name="x",
+        origin_address="100 Main St",
+        destination_address="200 Oak Ave",
+        created_at=None,
+    )
+    _install_validator(monkeypatch, invalid=set())
+
+    r = patched_app.patch(
+        "/api/v1/trips/slug-00001", json={"origin_address": "999 Different St"}
+    )
+    assert r.status_code == 200
+
+    from app.services.trips import current_week_start, next_week_start
+
+    weeks = sorted(week for tid, week in fake_backfill_kickoffs if tid == 1)
+    assert weeks == sorted(
+        [current_week_start().isoformat(), next_week_start().isoformat()]
+    )
+
+
+def test_patch_name_only_does_not_kickoff_any_backfill(
+    patched_app: TestClient,
+    fake_trips_store: dict[int, Trip],
+    fake_backfill_kickoffs: list[tuple[int, str]],
+) -> None:
+    fake_trips_store[1] = _make_trip(
+        id=1,
+        user_id=99,
+        name="x",
+        origin_address="A",
+        destination_address="B",
+        created_at=None,
+    )
+    r = patched_app.patch("/api/v1/trips/slug-00001", json={"name": "renamed"})
+    assert r.status_code == 200
+    assert fake_backfill_kickoffs == []
+
+
+def test_patch_swap_backfills_both_weeks(
+    patched_app: TestClient,
+    fake_trips_store: dict[int, Trip],
+    fake_backfill_kickoffs: list[tuple[int, str]],
+) -> None:
+    fake_trips_store[1] = _make_trip(
+        id=1,
+        user_id=99,
+        name="x",
+        origin_address="100 Main St",
+        destination_address="200 Oak Ave",
+        created_at=None,
+    )
+    r = patched_app.patch("/api/v1/trips/slug-00001", json={"swap_addresses": True})
+    assert r.status_code == 200
+
+    from app.services.trips import current_week_start, next_week_start
+
+    weeks = sorted(week for tid, week in fake_backfill_kickoffs if tid == 1)
+    assert weeks == sorted(
+        [current_week_start().isoformat(), next_week_start().isoformat()]
+    )
+
+
+def test_heatmap_default_returns_current_week_with_flag(
+    patched_app: TestClient, fake_trips_store: dict[int, Trip]
+) -> None:
+    fake_trips_store[1] = _make_trip(
+        id=1,
+        user_id=99,
+        name="x",
+        origin_address="a",
+        destination_address="b",
+        created_at=None,
+    )
+    r = patched_app.get("/api/v1/trips/slug-00001/heatmap")
+    assert r.status_code == 200
+
+    from app.services.trips import current_week_start
+
+    body = r.json()
+    assert body["week_start_date"] == current_week_start().isoformat()
+    assert body["next_week_available"] is False
+
+
+def test_heatmap_week_next_returns_next_week_data(
+    patched_app: TestClient, fake_trips_store: dict[int, Trip]
+) -> None:
+    fake_trips_store[1] = _make_trip(
+        id=1,
+        user_id=99,
+        name="x",
+        origin_address="a",
+        destination_address="b",
+        created_at=None,
+    )
+    r = patched_app.get("/api/v1/trips/slug-00001/heatmap?week=next")
+    assert r.status_code == 200
+
+    from app.services.trips import next_week_start
+
+    body = r.json()
+    assert body["week_start_date"] == next_week_start().isoformat()
+
+
+def test_heatmap_next_week_available_flag_flips_when_populated(
+    patched_app: TestClient,
+    fake_trips_store: dict[int, Trip],
+    fake_next_week_available: dict[str, bool],
+) -> None:
+    fake_trips_store[1] = _make_trip(
+        id=1,
+        user_id=99,
+        name="x",
+        origin_address="a",
+        destination_address="b",
+        created_at=None,
+    )
+    fake_next_week_available["value"] = True
+    r = patched_app.get("/api/v1/trips/slug-00001/heatmap")
+    assert r.status_code == 200
+    assert r.json()["next_week_available"] is True
+
+
+def test_heatmap_rejects_invalid_week_param(
+    patched_app: TestClient, fake_trips_store: dict[int, Trip]
+) -> None:
+    """Anything outside {current, next} should be a 422 from FastAPI."""
+    fake_trips_store[1] = _make_trip(
+        id=1,
+        user_id=99,
+        name="x",
+        origin_address="a",
+        destination_address="b",
+        created_at=None,
+    )
+    r = patched_app.get("/api/v1/trips/slug-00001/heatmap?week=last")
+    assert r.status_code == 422
+
+
+def test_backfill_status_week_next_does_not_kickoff(
+    patched_app: TestClient,
+    fake_trips_store: dict[int, Trip],
+    fake_backfill_kickoffs: list[tuple[int, str]],
+) -> None:
+    """`?week=next` is read-only — only the cron + create/edit may write next week."""
+    fake_trips_store[1] = _make_trip(
+        id=1,
+        user_id=99,
+        name="x",
+        origin_address="a",
+        destination_address="b",
+        created_at=None,
+    )
+    r = patched_app.get("/api/v1/trips/slug-00001/backfill-status?week=next")
+    assert r.status_code == 200
+    assert fake_backfill_kickoffs == []
+
+
+def test_backfill_status_week_current_still_self_heals(
+    patched_app: TestClient,
+    fake_trips_store: dict[int, Trip],
+    fake_backfill_kickoffs: list[tuple[int, str]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The current-week self-heal path keeps working: 0 samples → enqueue."""
+    fake_trips_store[1] = _make_trip(
+        id=1,
+        user_id=99,
+        name="x",
+        origin_address="a",
+        destination_address="b",
+        created_at=None,
+    )
+
+    import app.api.trips_api as trips_api_mod
+
+    monkeypatch.setattr(
+        trips_api_mod,
+        "sample_status_for_trip",
+        lambda _tid, _ws: {"total": 0, "ready": 0},
+    )
+
+    r = patched_app.get("/api/v1/trips/slug-00001/backfill-status?week=current")
+    assert r.status_code == 200
+
+    from app.services.trips import current_week_start
+
+    assert fake_backfill_kickoffs == [(1, current_week_start().isoformat())]

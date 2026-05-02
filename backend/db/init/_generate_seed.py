@@ -31,6 +31,9 @@ DEV_NAME = "Local Dev"
 TRIP_NAME = "Home to Work"
 TRIP_ORIGIN = "4585 Thousand Oaks Dr, San Jose, CA 95136"
 TRIP_DESTINATION = "650 California St, San Francisco, CA 94108"
+# Deterministic 10-hex-char slug for the dev seed trip so local URLs
+# stay stable across `make clean` cycles. Real trip slugs are random.
+TRIP_SLUG = "devlocal01"
 
 MONDAY = date(2025, 11, 10)
 WEEKDAYS = [MONDAY + timedelta(days=i) for i in range(7)]
@@ -91,8 +94,9 @@ def main() -> None:
         f"    {sql_value(DEV_GOOGLE_SUB)}, {sql_value(DEV_EMAIL)}, {sql_value(DEV_NAME)}",
         ");",
         "",
-        "-- Dev user's Home -> Work trip.",
-        "INSERT IGNORE INTO trips (user_id, name, origin_address, destination_address) VALUES (",
+        "-- Dev user's Home -> Work trip (fixed slug for stable local URLs).",
+        "INSERT IGNORE INTO trips (slug, user_id, name, origin_address, destination_address) VALUES (",
+        f"    {sql_value(TRIP_SLUG)},",
         f"    (SELECT id FROM users WHERE email = {sql_value(DEV_EMAIL)}),",
         f"    {sql_value(TRIP_NAME)}, {sql_value(TRIP_ORIGIN)}, {sql_value(TRIP_DESTINATION)}",
         ");",

@@ -3,11 +3,13 @@
 Know exactly when to leave. Sign in with Google, save up to a few
 "trips" (origin → destination address pairs), and see a
 15-minute-resolution heatmap of expected drive times for the current
-week, in both directions, 06:00 – 21:00, every day Mon-Sun.
+week, in both directions, 06:00 – 21:00, every day Mon-Sun. The
+upcoming week becomes available too as soon as it's been refreshed,
+so most of the time you can flip between "this week" and "next week".
 
 Lives at https://time2leave.com.
 
-- **Backend** — FastAPI + MySQL + APScheduler. Friday-23:00-PT job samples
+- **Backend** — FastAPI + MySQL + APScheduler. Monday-01:00-PT job samples
   Google's Routes Matrix API for every active trip and stores per-slot
   durations in `commute_samples`. Per-user trip caps and a hard ceiling on
   weekly Routes Matrix calls keep the API budget under control.
@@ -43,7 +45,7 @@ Run `make help` for the full target list (`test`, `typecheck`, `logs`,
 ## Architecture
 
 ```
-                          (Friday 23:00 PT — APScheduler, prod)
+                          (Monday 01:00 PT — APScheduler, prod)
                                      │
                                      ▼
                     enumerate active trips (per user)
@@ -67,8 +69,8 @@ Run `make help` for the full target list (`test`, `typecheck`, `logs`,
 
 | Event | What happens |
 | --- | --- |
-| User creates a trip | `POST /trips` returns the new trip immediately and kicks off `backfill_trip_current_week` in a background task. The frontend polls `/backfill-status` every 4 s and re-renders the heatmap as cells fill in. |
-| Friday 23:00 PT cron | `main()` enumerates every active trip, refuses to start if `slots_per_trip × trips > MAX_WEEKLY_ROUTES_CALLS`, then upserts empty samples for next week before filling them via the configured `CommuteProvider`. |
+| User creates a trip | `POST /trips` returns the new trip immediately and kicks off two background backfills (current week + next week) via `backfill_trip_for_week` so both weeks are usable right away. The frontend polls `/backfill-status` every 4 s and re-renders the heatmap as cells fill in. |
+| Monday 01:00 PT cron | `main()` enumerates every active trip, refuses to start if `slots_per_trip × trips > MAX_WEEKLY_ROUTES_CALLS`, then upserts empty samples for next week before filling them via the configured `CommuteProvider`. Running just after the Pacific week rollover keeps both the current and next week populated for ~99% of the week. |
 | User deletes a trip | Soft-delete (`deleted_at = NOW()`); samples are preserved but the trip stops being refreshed and disappears from `/trips`. |
 
 ### Quotas and cost ceilings
@@ -78,8 +80,8 @@ Run `make help` for the full target list (`test`, `typecheck`, `logs`,
 | `MAX_TRIPS_PER_USER` | 1 | Hard cap on active trips per non-admin user. |
 | `MAX_TRIPS_PER_ADMIN` | 2 | Elevated per-user cap for emails in `ADMIN_EMAILS`. |
 | `MAX_TRIPS_TOTAL` | 10 | Global hard cap. New trips return 409 once reached. |
-| `MAX_TRIP_MUTATIONS_PER_WEEK` | 1 | Per-user rolling-7-day cap on trip creates + address-changing patches (each one fires a fresh Routes Matrix backfill ≈ $8.40). Returns 429 when exceeded. |
-| `MAX_WEEKLY_ROUTES_CALLS` | 150 000 | Friday cron aborts before any call if it would exceed this. |
+| `MAX_TRIP_MUTATIONS_PER_WEEK` | 1 | Per-user rolling-7-day cap on trip creates + address-changing patches (each one fires a fresh Routes Matrix backfill for *both* the current and next week ≈ $16.80). Returns 429 when exceeded. |
+| `MAX_WEEKLY_ROUTES_CALLS` | 150 000 | Weekly Mon-01:00-PT cron aborts before any call if it would exceed this. |
 | Slots per trip per week | 60 × 7 × 2 = 840 | (60 quarter-hours of 06:00-21:00) × 7 days × 2 directions. |
 
 ## Backend
@@ -96,7 +98,7 @@ Location: [`backend/`](backend/).
   - [`app/api/trips_api.py`](backend/app/api/trips_api.py) — per-user trip CRUD + heatmap + backfill status.
   - [`app/api/admin_api.py`](backend/app/api/admin_api.py) — allowlist management + manual data-gathering trigger. Gated by `is_admin` (computed from `ADMIN_EMAILS`).
   - [`app/api/healthcheck_api.py`](backend/app/api/healthcheck_api.py) — liveness + scheduler status.
-- Data gathering: [`app/job/data_gathering.py`](backend/app/job/data_gathering.py) (`main`, `backfill_trip_current_week`) + pluggable [`app/job/providers.py`](backend/app/job/providers.py) (`GoogleRoutesProvider`, `FixtureProvider`).
+- Data gathering: [`app/job/data_gathering.py`](backend/app/job/data_gathering.py) (`main`, `backfill_trip_for_week`) + pluggable [`app/job/providers.py`](backend/app/job/providers.py) (`GoogleRoutesProvider`, `FixtureProvider`).
 - DB layer: [`app/db/db.py`](backend/app/db/db.py) — lazy `MySQLConnectionPool` + `Database` context manager.
 
 ### Environment variables

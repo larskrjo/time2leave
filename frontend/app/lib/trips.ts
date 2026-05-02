@@ -19,8 +19,15 @@ export const WEEKDAYS = [
 ] as const;
 export type Weekday = (typeof WEEKDAYS)[number];
 
+/**
+ * Public trip projection.
+ *
+ * `id` is the backend-issued 10-hex-char slug (e.g. `"a1b2c3d4e5"`),
+ * not an auto-incrementing integer. The format keeps URLs short while
+ * not leaking how many trips the system has overall.
+ */
 export type TripSummary = {
-    id: number;
+    id: string;
     name: string | null;
     origin_address: string;
     destination_address: string;
@@ -37,19 +44,37 @@ export type TripDetail = TripSummary & { backfill: BackfillStatus };
 
 export type Direction = "outbound" | "return";
 
+/**
+ * Which week the SPA is asking the backend about.
+ *
+ * `"current"` is the default and matches today's behavior. `"next"`
+ * targets the upcoming week's `week_start_date` and is gated by the
+ * `next_week_available` flag in the heatmap payload — the SPA only
+ * shows the toggle once the backend has a fully populated next-week
+ * heatmap to hand back.
+ */
+export type Week = "current" | "next";
+
 /** Nested {direction: {weekday: {hhmm: minutes | null}}} heatmap shape. */
 export type HeatmapPayload = {
     outbound: Partial<Record<Weekday, Record<string, number | null>>>;
     return: Partial<Record<Weekday, Record<string, number | null>>>;
     week_start_date: string;
     weekdays: Weekday[];
+    /**
+     * True iff the upcoming week's heatmap is fully populated for this
+     * trip. Set by the backend on every heatmap response (regardless of
+     * which week was requested), so the SPA can decide whether to render
+     * the "Next week" toggle on its very first load.
+     */
+    next_week_available: boolean;
 };
 
 export async function listTrips(): Promise<TripSummary[]> {
     return apiFetch<TripSummary[]>(API.trips);
 }
 
-export async function getTrip(id: number | string): Promise<TripDetail> {
+export async function getTrip(id: string): Promise<TripDetail> {
     return apiFetch<TripDetail>(API.trip(id));
 }
 
@@ -64,7 +89,7 @@ export async function createTrip(input: {
     });
 }
 
-export async function deleteTrip(id: number | string): Promise<void> {
+export async function deleteTrip(id: string): Promise<void> {
     await apiFetch<null>(API.trip(id), { method: "DELETE" });
 }
 
@@ -101,7 +126,7 @@ export type TripPatch = {
 };
 
 export async function updateTrip(
-    id: number | string,
+    id: string,
     patch: TripPatch,
 ): Promise<TripDetail> {
     return apiFetch<TripDetail>(API.trip(id), {
@@ -111,15 +136,19 @@ export async function updateTrip(
 }
 
 export async function getTripHeatmap(
-    id: number | string,
+    id: string,
+    week: Week = "current",
 ): Promise<HeatmapPayload> {
-    return apiFetch<HeatmapPayload>(API.tripHeatmap(id));
+    return apiFetch<HeatmapPayload>(`${API.tripHeatmap(id)}?week=${week}`);
 }
 
 export async function getTripBackfillStatus(
-    id: number | string,
+    id: string,
+    week: Week = "current",
 ): Promise<BackfillStatus> {
-    return apiFetch<BackfillStatus>(API.tripBackfillStatus(id));
+    return apiFetch<BackfillStatus>(
+        `${API.tripBackfillStatus(id)}?week=${week}`,
+    );
 }
 
 /**

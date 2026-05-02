@@ -1,6 +1,6 @@
 """Weekly multi-trip commute-data gathering.
 
-What runs on the Friday 23:00 PT cron (`main()`):
+What runs on the Monday 01:00 PT cron (`main()`):
 
     1. Enumerate every active trip.
     2. For each trip, in both directions, for each day Mon-Sun, generate
@@ -12,11 +12,17 @@ What runs on the Friday 23:00 PT cron (`main()`):
        "0 / N ready" status for the upcoming week.
     5. Fill them in by calling the configured `CommuteProvider`.
 
-What runs when a user creates a trip (`backfill_trip_current_week`):
+    The cron targets `next_week_monday()` so users always see the
+    upcoming week pre-populated alongside the current one for the
+    rest of the week.
 
-    Same as above but for exactly one trip and the *current* week, so
-    the heatmap starts populating right away instead of waiting until
-    Friday.
+What runs when a user creates or address-edits a trip (`backfill_trip_for_week`):
+
+    Same as above but for exactly one trip and a caller-specified week.
+    The API layer fires this for *both* the current and next week on
+    every billed mutation so the new/edited trip immediately matches
+    the "two weeks always visible" invariant the cron maintains for
+    fleet-wide trips.
 
 Mid-backfill cancellation:
 
@@ -40,7 +46,7 @@ Past-slot handling:
 
     The DB still stores the original slot timestamp (so the unique
     key `(trip_id, direction, departure_time_rfc3339)` keeps its
-    natural meaning and the Friday cron's next-week run doesn't
+    natural meaning and the weekly cron's next-week run doesn't
     collide with a backfill that already touched those future
     timestamps).
 """
@@ -397,7 +403,7 @@ def main(
     provider: CommuteProvider | None = None,
     settings: Settings | None = None,
 ) -> None:
-    """Friday-cron entry point. Refreshes next week's data for every trip."""
+    """Weekly cron entry point (Mon 01:00 PT). Refreshes next week's data for every trip."""
     settings = settings or get_settings()
     provider = provider or get_provider(settings)
     trips = list_active_trips()
@@ -410,27 +416,25 @@ def main(
     )
 
 
-def backfill_trip_current_week(
+def backfill_trip_for_week(
     trip_id: int,
+    week_start: date,
     provider: CommuteProvider | None = None,
     settings: Settings | None = None,
 ) -> None:
-    """Fill this week's heatmap for one trip right now (called from API).
+    """Fill one specific week of one trip's heatmap right now (called from API).
 
     We intentionally skip the global ceiling here because it's a single
     trip's worth of calls (~840), which is never going to be the problem
-    — the Friday fleet-wide run is.
+    — the Monday fleet-wide run is.
     """
     settings = settings or get_settings()
     provider = provider or get_provider(settings)
-    from app.services.trips import (
-        list_trips_for_user,  # noqa: F401 (avoid import cycle)
-    )
 
     with Database() as cursor:
         cursor.execute(
             """
-            SELECT id, user_id, name, origin_address, destination_address, created_at
+            SELECT id, slug, user_id, name, origin_address, destination_address, created_at
             FROM trips
             WHERE id = %s AND deleted_at IS NULL
             """,
@@ -439,26 +443,45 @@ def backfill_trip_current_week(
         row = cursor.fetchone()
 
     if row is None:
-        logger.warning("backfill_trip_current_week: trip %s not found", trip_id)
+        logger.warning(
+            "backfill_trip_for_week: trip %s not found (week=%s)",
+            trip_id,
+            week_start,
+        )
         return
 
     from app.services.trips import Trip as TripModel
 
     trip = TripModel(
         id=int(row[0]),
-        user_id=int(row[1]),
-        name=row[2],
-        origin_address=row[3],
-        destination_address=row[4],
-        created_at=row[5],
+        slug=str(row[1]),
+        user_id=int(row[2]),
+        name=row[3],
+        origin_address=row[4],
+        destination_address=row[5],
+        created_at=row[6],
     )
 
     _plan_and_run(
         trips=[trip],
-        week_start=current_week_monday(),
+        week_start=week_start,
         provider=provider,
         settings=settings,
         enforce_ceiling=False,
+    )
+
+
+def backfill_trip_current_week(
+    trip_id: int,
+    provider: CommuteProvider | None = None,
+    settings: Settings | None = None,
+) -> None:
+    """Backwards-compatible wrapper that backfills the current week only.
+
+    Prefer `backfill_trip_for_week(trip_id, week_start)` in new code.
+    """
+    backfill_trip_for_week(
+        trip_id, current_week_monday(), provider=provider, settings=settings
     )
 
 

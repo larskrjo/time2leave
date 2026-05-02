@@ -8,8 +8,9 @@ INSERT IGNORE INTO users (google_sub, email, name) VALUES (
     'dev-local-000', 'dev@example.com', 'Local Dev'
 );
 
--- Dev user's Home -> Work trip.
-INSERT IGNORE INTO trips (user_id, name, origin_address, destination_address) VALUES (
+-- Dev user's Home -> Work trip (fixed slug for stable local URLs).
+INSERT IGNORE INTO trips (slug, user_id, name, origin_address, destination_address) VALUES (
+    'devlocal01',
     (SELECT id FROM users WHERE email = 'dev@example.com'),
     'Home to Work', '4585 Thousand Oaks Dr, San Jose, CA 95136', '650 California St, San Francisco, CA 94108'
 );
