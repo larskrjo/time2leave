@@ -1,7 +1,7 @@
 [project]
-name = "traffic-larsjohansen-com-backend"
+name = "time2leave-backend"
 version = "0.1.0"
-description = "Traffic Lars Johansen Com Backend"
+description = "time2leave backend"
 requires-python = ">=3.12"
 
 dependencies = [

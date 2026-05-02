@@ -1,4 +1,4 @@
-# Top-level helper targets for traffic-larsjohansen-com.
+# Top-level helper targets for time2leave.
 # Run `make help` for the full list.
 
 SHELL := /usr/bin/env bash

@@ -210,7 +210,7 @@ fails fast with a clear message if `npm` or `aws` is missing.
 
 ```bash
 # On the EC2 host:
-cd /home/ec2-user/traffic-larsjohansen-com
+cd /home/ec2-user/time2leave
 git pull
 cd backend
 ./scripts/build-and-deploy.sh
@@ -264,7 +264,7 @@ From your **local machine** (requires Node 20+ and AWS CLI with creds for
 bucket `traffic-larsjohansen-frontend` / distribution `E1XJU7E7JJA9QX`):
 
 ```bash
-cd ~/code/traffic-larsjohansen-com
+cd ~/code/time2leave
 git pull
 make deploy-frontend
 ```
