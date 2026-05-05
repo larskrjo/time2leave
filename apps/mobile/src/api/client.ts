@@ -7,9 +7,11 @@
  * `Authorization: Bearer <jwt>`. The web app does cookies; the mobile
  * app does headers; the same backend serves both.
  *
- * All API URLs flow through `createApiPaths(baseUrl)` so the mobile
- * app and the web app emit identical paths off their own configured
- * base URLs.
+ * Strict by design: `BASE_URL` comes from `requireEnv()`, which
+ * throws if `<RootLayout>` hasn't already validated the env. There is
+ * no production-default fallback URL here — a misconfigured build
+ * lands on the SetupRequired screen rather than silently calling the
+ * wrong host.
  */
 import {
     createApiFetch,
@@ -18,21 +20,24 @@ import {
     type ApiPaths,
 } from "@time2leave/shared";
 
+import { requireEnv } from "~/config/env";
 import { getCurrentToken } from "./storage";
 
-const FALLBACK_BASE_URL = "https://api.time2leave.com";
+let _api: ApiPaths | null = null;
 
 /**
- * Resolved at module-eval time. Expo inlines `process.env.EXPO_PUBLIC_*`
- * into the bundle, so the value is constant for the running app. To
- * change it during local dev, restart `expo start`.
+ * Lazily-instantiated `ApiPaths`. We can't build it at module load
+ * because that would call `requireEnv()` *before* `<RootLayout>` has
+ * gated the env, breaking the SetupRequired fallback for unconfigured
+ * checkouts. Calling `getApi()` from inside a render or effect (i.e.
+ * always after the gate) is safe.
  */
-export const BASE_URL: string =
-    process.env.EXPO_PUBLIC_API_BASE_URL && process.env.EXPO_PUBLIC_API_BASE_URL.length > 0
-        ? process.env.EXPO_PUBLIC_API_BASE_URL
-        : FALLBACK_BASE_URL;
-
-export const API: ApiPaths = createApiPaths(BASE_URL);
+export function getApi(): ApiPaths {
+    if (_api === null) {
+        _api = createApiPaths(requireEnv().apiBaseUrl);
+    }
+    return _api;
+}
 
 export const apiFetch: ApiFetch = createApiFetch({
     prepareInit: (init) => {

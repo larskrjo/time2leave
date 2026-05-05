@@ -14,9 +14,22 @@ USE time2leave;
 -- old table, this drop clears it.
 DROP TABLE IF EXISTS commute_slots;
 
+-- `google_sub` and `apple_sub` are both nullable: a user may have
+-- signed in with only one provider, and Apple's `sub` is only
+-- present for users who used Sign in with Apple. Email is still
+-- the canonical cross-provider identifier (allowlist keys off it
+-- and the unique constraint prevents the same person from
+-- accidentally landing as two rows by signing in with both
+-- providers from one Apple ID that delivers a real address).
+--
+-- MySQL treats multiple NULLs as *distinct* in a UNIQUE index, so
+-- having two Google-only users with NULL `apple_sub` (and vice
+-- versa) is fine — the unique constraint only kicks in when an
+-- actual identifier is present.
 CREATE TABLE IF NOT EXISTS users (
     `id`            int           NOT NULL AUTO_INCREMENT,
-    `google_sub`    varchar(255)  NOT NULL,
+    `google_sub`    varchar(255)          DEFAULT NULL,
+    `apple_sub`     varchar(255)          DEFAULT NULL,
     `email`         varchar(320)  NOT NULL,
     `name`          varchar(255)          DEFAULT NULL,
     `picture_url`   varchar(1024)         DEFAULT NULL,
@@ -25,6 +38,7 @@ CREATE TABLE IF NOT EXISTS users (
                                           ON UPDATE CURRENT_TIMESTAMP,
     PRIMARY KEY (`id`),
     UNIQUE KEY `uniq_users_google_sub` (`google_sub`),
+    UNIQUE KEY `uniq_users_apple_sub` (`apple_sub`),
     UNIQUE KEY `uniq_users_email` (`email`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 

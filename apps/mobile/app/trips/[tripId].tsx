@@ -5,14 +5,25 @@
  *   - Loads the trip + heatmap on mount.
  *   - If backfill < 100%, polls /backfill-status every 4s and
  *     re-fetches the heatmap until ready.
- *   - Direction tabs (outbound / return).
+ *   - Direction tabs (outbound / return) — iOS UISegmentedControl style.
  *   - Week toggle (current / next) when next_week_available flips on.
- *   - Best-slot-per-day chip strip + the full heatmap grid.
+ *   - Best-time-per-day list rendered as an accordion (`TripHeatmap`).
  *   - Delete with confirmation.
+ *
+ * Visual model (iOS):
+ *   - Native large-title nav bar (configured by `trips/_layout.tsx`)
+ *     so the trip name lives in the toolbar and shrinks as the user
+ *     scrolls. Header right is a destructive `trash` SF symbol.
+ *   - From / To addresses live in an iOS inset-grouped list — the
+ *     Settings.app aesthetic.
+ *   - Section labels above the heatmap follow the iOS pattern: small
+ *     uppercase header on the leading edge with a quiet status pill
+ *     ("Week of Apr 27") on the trailing edge.
  */
 import { useEffect, useState } from "react";
 import {
     Alert,
+    Pressable,
     RefreshControl,
     ScrollView,
     View,
@@ -21,9 +32,7 @@ import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import {
     Banner,
     Button,
-    IconButton,
     ProgressBar,
-    SegmentedButtons,
     Text,
     useTheme,
 } from "react-native-paper";
@@ -39,9 +48,14 @@ import {
     type Week,
 } from "@time2leave/shared";
 
-import { API, apiFetch } from "~/api/client";
+import { apiFetch, getApi } from "~/api/client";
 import { Loading } from "~/components/Loading";
 import { TripHeatmap } from "~/components/TripHeatmap";
+import { ScrollEdgeFade } from "~/components/native/Glass";
+import { GroupedList, GroupedRow } from "~/components/native/GroupedList";
+import { IOSSegmentedControl } from "~/components/native/IOSSegmentedControl";
+import { IOSStatusPill } from "~/components/native/StatusPill";
+import { Symbol } from "~/components/native/Symbol";
 
 const POLL_INTERVAL_MS = 4_000;
 
@@ -57,20 +71,20 @@ export default function TripDetailRoute() {
 
     const tripQuery = useQuery({
         queryKey: ["trip", tripId],
-        queryFn: () => sharedGetTrip(apiFetch, API, tripId!),
+        queryFn: () => sharedGetTrip(apiFetch, getApi(), tripId!),
         enabled: !!tripId,
     });
 
     const heatmapQuery = useQuery({
         queryKey: ["trip", tripId, "heatmap", week],
-        queryFn: () => sharedGetTripHeatmap(apiFetch, API, tripId!, week),
+        queryFn: () => sharedGetTripHeatmap(apiFetch, getApi(), tripId!, week),
         enabled: !!tripId,
     });
 
     const backfillQuery = useQuery({
         queryKey: ["trip", tripId, "backfill", week],
         queryFn: () =>
-            sharedGetTripBackfillStatus(apiFetch, API, tripId!, week),
+            sharedGetTripBackfillStatus(apiFetch, getApi(), tripId!, week),
         enabled: !!tripId && week === "current",
         // Stop polling as soon as we hit 100% — saves battery + API calls.
         refetchInterval: (query) => {
@@ -92,7 +106,7 @@ export default function TripDetailRoute() {
     }, [backfillPct, queryClient, tripId, week]);
 
     const deleteMutation = useMutation({
-        mutationFn: () => sharedDeleteTrip(apiFetch, API, tripId!),
+        mutationFn: () => sharedDeleteTrip(apiFetch, getApi(), tripId!),
         onSuccess: async () => {
             await queryClient.invalidateQueries({ queryKey: ["trips"] });
             router.replace("/trips");
@@ -106,17 +120,35 @@ export default function TripDetailRoute() {
     });
 
     if (!tripId) return null;
-    if (tripQuery.isLoading) return <Loading label="Loading trip..." />;
+    if (tripQuery.isLoading) return <Loading />;
     if (tripQuery.isError) {
         return (
-            <View style={{ padding: 24, gap: 12 }}>
-                <Text variant="titleMedium">Trip not found</Text>
+            <View
+                style={{
+                    flex: 1,
+                    backgroundColor: theme.colors.background,
+                    padding: 24,
+                    paddingTop: insets.top + 24,
+                    gap: 12,
+                }}
+            >
+                <Stack.Screen options={{ title: "Trip not found" }} />
+                <Text
+                    variant="titleMedium"
+                    style={{ color: theme.colors.onBackground }}
+                >
+                    Trip not found
+                </Text>
                 <Text style={{ color: theme.colors.onSurfaceVariant }}>
                     {tripQuery.error instanceof Error
                         ? tripQuery.error.message
                         : "This trip may have been removed."}
                 </Text>
-                <Button mode="outlined" onPress={() => router.replace("/trips")}>
+                <Button
+                    mode="outlined"
+                    icon="arrow-left"
+                    onPress={() => router.replace("/trips")}
+                >
                     Back to trips
                 </Button>
             </View>
@@ -125,40 +157,68 @@ export default function TripDetailRoute() {
 
     const trip = tripQuery.data!;
     const showWeekToggle = heatmapQuery.data?.next_week_available === true;
+    const weekLabel = heatmapQuery.data?.week_start_date
+        ? formatWeekStart(heatmapQuery.data.week_start_date)
+        : null;
+    const tripTitle = trip.name?.trim() || "Untitled trip";
+
+    const confirmDelete = () => {
+        Alert.alert(
+            "Delete trip?",
+            `Remove "${trip.name ?? trip.origin_address}"?`,
+            [
+                { text: "Cancel", style: "cancel" },
+                {
+                    text: "Delete",
+                    style: "destructive",
+                    onPress: () => deleteMutation.mutate(),
+                },
+            ],
+        );
+    };
 
     return (
-        <>
+        <View style={{ flex: 1, backgroundColor: theme.colors.background }}>
+            {/* Static `headerBackTitle: "Trips"` comes from the layout
+                so iOS knows the back-chevron label before the push
+                transition starts. We inject the *dynamic* trip title
+                (only known after the trip query resolves) and the
+                destructive header-right action here. */}
             <Stack.Screen
                 options={{
-                    title: trip.name ?? "Trip",
+                    title: tripTitle,
                     headerRight: () => (
-                        <IconButton
-                            icon="trash-can-outline"
-                            iconColor={theme.colors.error}
-                            onPress={() =>
-                                Alert.alert(
-                                    "Delete trip?",
-                                    `Remove "${trip.name ?? trip.origin_address}"?`,
-                                    [
-                                        { text: "Cancel", style: "cancel" },
-                                        {
-                                            text: "Delete",
-                                            style: "destructive",
-                                            onPress: () =>
-                                                deleteMutation.mutate(),
-                                        },
-                                    ],
-                                )
-                            }
-                        />
+                        <Pressable
+                            onPress={confirmDelete}
+                            accessibilityRole="button"
+                            accessibilityLabel="Delete trip"
+                            hitSlop={12}
+                            style={({ pressed }) => ({
+                                opacity: pressed ? 0.5 : 1,
+                                paddingHorizontal: 4,
+                                paddingVertical: 4,
+                            })}
+                        >
+                            <Symbol
+                                name={{
+                                    ios: "trash",
+                                    android: "trash-can-outline",
+                                }}
+                                size={22}
+                                color={theme.colors.error}
+                            />
+                        </Pressable>
                     ),
                 }}
             />
+
             <ScrollView
+                contentInsetAdjustmentBehavior="automatic"
                 contentContainerStyle={{
-                    padding: 16,
-                    paddingBottom: insets.bottom + 24,
-                    gap: 16,
+                    paddingHorizontal: 20,
+                    paddingTop: 4,
+                    paddingBottom: insets.bottom + 32,
+                    gap: 22,
                 }}
                 refreshControl={
                     <RefreshControl
@@ -170,33 +230,36 @@ export default function TripDetailRoute() {
                             void tripQuery.refetch();
                             void backfillQuery.refetch();
                         }}
+                        tintColor={theme.colors.primary}
                     />
                 }
             >
-                {/* Header: addresses + week label */}
-                <View style={{ gap: 6 }}>
-                    {heatmapQuery.data?.week_start_date ? (
-                        <Text
-                            variant="labelMedium"
-                            style={{
-                                color: theme.colors.primary,
-                                letterSpacing: 1.2,
+                {/* Route — iOS inset grouped list with two address rows. */}
+                <Section header="Route">
+                    <GroupedList>
+                        <GroupedRow
+                            icon={{
+                                ios: "house.fill",
+                                android: "home-outline",
                             }}
-                        >
-                            WEEK OF{" "}
-                            {formatWeekStart(heatmapQuery.data.week_start_date)}
-                        </Text>
-                    ) : null}
-                    <Text variant="headlineSmall" style={{ fontWeight: "800" }}>
-                        {trip.name ?? "Trip"}
-                    </Text>
-                    <Row label="From" value={trip.origin_address} />
-                    <Row label="To" value={trip.destination_address} />
-                </View>
+                            iconTint={theme.colors.primary}
+                            title="From"
+                            subtitle={trip.origin_address}
+                        />
+                        <GroupedRow
+                            icon={{
+                                ios: "mappin.circle.fill",
+                                android: "map-marker",
+                            }}
+                            iconTint={theme.colors.secondary}
+                            title="To"
+                            subtitle={trip.destination_address}
+                        />
+                    </GroupedList>
+                </Section>
 
-                {/* Backfill progress banner — only while < 100% on the
-                    current week. Deliberately quiet (no spinner) because
-                    we already animate cells in as they arrive. */}
+                {/* Backfill progress — quiet banner; cells animate in
+                    independently as samples arrive. */}
                 {week === "current" && backfillPct < 100 ? (
                     <View style={{ gap: 8 }}>
                         <Banner visible icon="progress-clock">
@@ -204,94 +267,143 @@ export default function TripDetailRoute() {
                         </Banner>
                         <ProgressBar
                             progress={Math.max(0, Math.min(1, backfillPct / 100))}
+                            color={theme.colors.primary}
                         />
                     </View>
                 ) : null}
 
-                {showWeekToggle ? (
-                    <SegmentedButtons
-                        value={week}
-                        onValueChange={(v) => setWeek(v as Week)}
-                        buttons={[
-                            { value: "current", label: "This week" },
-                            { value: "next", label: "Next week" },
+                {/* Direction + week filters. The week toggle only
+                    appears once the next-week samples are ready, to
+                    avoid offering an empty selector on a brand-new
+                    trip. */}
+                <View style={{ gap: 10 }}>
+                    <IOSSegmentedControl<Direction>
+                        value={direction}
+                        onChange={setDirection}
+                        options={[
+                            { value: "outbound", label: "Outbound" },
+                            { value: "return", label: "Return" },
                         ]}
                     />
-                ) : null}
+                    {showWeekToggle ? (
+                        <IOSSegmentedControl<Week>
+                            value={week}
+                            onChange={setWeek}
+                            options={[
+                                { value: "current", label: "This week" },
+                                { value: "next", label: "Next week" },
+                            ]}
+                        />
+                    ) : null}
+                </View>
 
-                <SegmentedButtons
-                    value={direction}
-                    onValueChange={(v) => setDirection(v as Direction)}
-                    buttons={[
-                        {
-                            value: "outbound",
-                            label: "Outbound",
-                            icon: "arrow-right",
-                        },
-                        {
-                            value: "return",
-                            label: "Return",
-                            icon: "arrow-left",
-                        },
-                    ]}
-                />
-
-                {heatmapQuery.data ? (
-                    <TripHeatmap
-                        heatmap={heatmapQuery.data}
-                        direction={direction}
-                        showNow={week === "current"}
-                    />
-                ) : (
-                    <Loading />
-                )}
-
-                <Text
-                    variant="bodySmall"
-                    style={{
-                        color: theme.colors.onSurfaceVariant,
-                        textAlign: "center",
-                    }}
+                <Section
+                    header="Best time per day"
+                    accessory={
+                        weekLabel ? (
+                            <IOSStatusPill
+                                icon={{
+                                    ios: "calendar",
+                                    android: "calendar",
+                                }}
+                                label={`Week of ${weekLabel}`}
+                            />
+                        ) : null
+                    }
+                    footer="Sampled every 15 min, 6am–9pm, Mon–Sun."
                 >
-                    Viewing {trip.name ?? "trip"} ·{" "}
-                    {week === "current" ? "this" : "next"} week
-                </Text>
+                    {heatmapQuery.data ? (
+                        <TripHeatmap
+                            heatmap={heatmapQuery.data}
+                            direction={direction}
+                            showNow={week === "current"}
+                        />
+                    ) : (
+                        <Loading />
+                    )}
+                </Section>
             </ScrollView>
-        </>
+
+            {/* Soft fade at the bottom edge so heatmap cells gracefully
+                disappear into the background near the home indicator
+                instead of cutting off at a hard line. */}
+            <ScrollEdgeFade edge="bottom" height={insets.bottom + 48} />
+        </View>
     );
 }
 
-function Row({ label, value }: { label: string; value: string }) {
+/**
+ * iOS-style section block with a header on the leading edge, an
+ * optional accessory pill on the trailing edge, and an optional
+ * footer note below the children. Modelled on `<GroupedSection>`
+ * but adds the right-side accessory slot.
+ */
+function Section({
+    header,
+    accessory,
+    footer,
+    children,
+}: {
+    header: string;
+    accessory?: React.ReactNode;
+    footer?: string;
+    children?: React.ReactNode;
+}) {
     const theme = useTheme();
     return (
-        <View style={{ flexDirection: "row", gap: 8, alignItems: "flex-start" }}>
-            <Text
-                variant="labelSmall"
+        <View style={{ gap: 8 }}>
+            <View
                 style={{
-                    color: theme.colors.primary,
-                    minWidth: 36,
-                    paddingTop: 2,
+                    flexDirection: "row",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    marginLeft: 14,
+                    marginRight: 4,
                 }}
             >
-                {label}
-            </Text>
-            <Text variant="bodyMedium" style={{ flex: 1 }}>
-                {value}
-            </Text>
+                <Text
+                    style={{
+                        color: theme.colors.onSurfaceVariant,
+                        textTransform: "uppercase",
+                        fontSize: 12,
+                        letterSpacing: 0.7,
+                        fontWeight: "600",
+                    }}
+                >
+                    {header}
+                </Text>
+                {accessory}
+            </View>
+            {children}
+            {footer ? (
+                <Text
+                    style={{
+                        color: theme.colors.onSurfaceVariant,
+                        fontSize: 12,
+                        lineHeight: 16,
+                        marginLeft: 14,
+                        marginRight: 14,
+                        marginTop: 2,
+                    }}
+                >
+                    {footer}
+                </Text>
+            ) : null}
         </View>
     );
 }
 
 function formatWeekStart(iso: string): string {
-    // Backend hands us "YYYY-MM-DD"; format it as "MMM D, YYYY" without
-    // any heavy date library.
+    // Backend hands us "YYYY-MM-DD"; format it as "MMM D" for the
+    // status pill (year is implicit in "this week" and noisy in a
+    // pill). Parse as local time to match the web app's
+    // `new Date(iso + "T00:00:00")` so the week label doesn't
+    // jump a day in non-UTC locales.
     const [y, m, d] = iso.split("-").map(Number);
     if (!y || !m || !d) return iso;
-    const dt = new Date(Date.UTC(y, m - 1, d));
+    const dt = new Date(y, m - 1, d);
     return dt.toLocaleDateString(undefined, {
-        timeZone: "UTC",
         month: "short",
         day: "numeric",
-        year: "numeric",
     });
 }

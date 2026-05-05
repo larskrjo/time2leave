@@ -3,21 +3,25 @@
  *
  * Uses `react-native-google-places-autocomplete`, which calls the
  * Maps Places HTTP API directly with the configured key (no Google
- * SDK required). Falls back to a plain `TextInput` when the API key
- * is missing — that's the right behavior for first-boot dev and for
- * forks that don't want to wire up Google Cloud.
+ * SDK required). The Maps API key is a *required* env var validated
+ * by `loadEnvOnce()` at boot, so this component never has to worry
+ * about a missing key — by the time it mounts, the key is guaranteed.
  *
- * The `react-native-google-places-autocomplete` library renders its
- * suggestions inside its own `FlatList`, which conflicts visually
- * with our parent `ScrollView`. We wrap the field in a fixed-height
- * container and let the suggestions overflow it (they'll absolutely
- * position above the next field) — same UX as the web version.
+ * The library renders its own `FlatList` of suggestions, which
+ * conflicts visually with our parent `ScrollView`. We wrap the field
+ * in a fixed-height container and let suggestions overflow it (they
+ * absolutely position above the next field) — same UX as the web
+ * version.
+ *
+ * Visual: matches the iOS-native field style we use in the rest of
+ * the app — soft tinted background, rounded corners, no Material
+ * notch border.
  */
-import { View } from "react-native";
-import { HelperText, TextInput, useTheme } from "react-native-paper";
+import { StyleSheet, View } from "react-native";
+import { useTheme } from "react-native-paper";
 import { GooglePlacesAutocomplete } from "react-native-google-places-autocomplete";
 
-const API_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY;
+import { requireEnv } from "~/config/env";
 
 type Props = {
     label: string;
@@ -33,24 +37,11 @@ export function PlacesAutocomplete({
     onChange,
 }: Props) {
     const theme = useTheme();
+    const apiKey = requireEnv().googleMapsApiKey;
 
-    if (!API_KEY) {
-        return (
-            <View>
-                <TextInput
-                    label={label}
-                    placeholder={placeholder}
-                    value={value}
-                    onChangeText={onChange}
-                    mode="outlined"
-                    autoCapitalize="words"
-                />
-                <HelperText type="info" visible padding="none">
-                    Set EXPO_PUBLIC_GOOGLE_MAPS_API_KEY to enable autocomplete.
-                </HelperText>
-            </View>
-        );
-    }
+    const fieldBg = theme.dark
+        ? "rgba(118,118,128,0.24)"
+        : "rgba(118,118,128,0.12)";
 
     return (
         <View style={{ minHeight: 60, zIndex: 1 }}>
@@ -69,23 +60,41 @@ export function PlacesAutocomplete({
                     onChangeText: onChange,
                     placeholderTextColor: theme.colors.onSurfaceVariant,
                 }}
-                query={{ key: API_KEY, language: "en" }}
+                query={{ key: apiKey, language: "en" }}
                 enablePoweredByContainer={false}
                 styles={{
                     textInput: {
-                        height: 56,
-                        backgroundColor: theme.colors.surface,
+                        height: 50,
+                        fontSize: 16,
+                        backgroundColor: fieldBg,
                         color: theme.colors.onSurface,
-                        borderRadius: 4,
-                        borderWidth: 1,
-                        borderColor: theme.colors.outline,
-                        paddingHorizontal: 16,
+                        borderRadius: 12,
+                        paddingHorizontal: 14,
                     },
                     listView: {
+                        marginTop: 4,
                         backgroundColor: theme.colors.surface,
-                        borderColor: theme.colors.outline,
-                        borderWidth: 1,
-                        borderRadius: 4,
+                        borderRadius: 12,
+                        borderWidth: StyleSheet.hairlineWidth,
+                        borderColor: theme.dark
+                            ? "rgba(255,255,255,0.12)"
+                            : "rgba(0,0,0,0.08)",
+                        overflow: "hidden",
+                    },
+                    row: {
+                        backgroundColor: theme.colors.surface,
+                        paddingVertical: 12,
+                        paddingHorizontal: 14,
+                    },
+                    description: {
+                        color: theme.colors.onSurface,
+                        fontSize: 15,
+                    },
+                    separator: {
+                        height: StyleSheet.hairlineWidth,
+                        backgroundColor: theme.dark
+                            ? "rgba(255,255,255,0.08)"
+                            : "rgba(60,60,67,0.18)",
                     },
                 }}
             />

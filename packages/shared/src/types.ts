@@ -106,6 +106,7 @@ export type SessionUser = {
 
 export type AuthConfig = {
     google_oauth_client_id: string | null;
+    apple_sign_in_enabled: boolean;
     dev_login_enabled: boolean;
 };
 

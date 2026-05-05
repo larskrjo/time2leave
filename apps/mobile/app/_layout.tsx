@@ -1,14 +1,20 @@
 /**
  * Root layout for the Expo Router stack.
  *
- * Sets up every cross-cutting provider exactly once:
- *   - SafeAreaProvider  — insets for notch / home indicator.
- *   - PaperProvider      — Material Design 3 components + theme.
- *   - QueryClientProvider — React Query for trips + heatmap data.
- *   - AuthProvider       — bearer-token sign-in state + secure storage.
- *
- * Then renders the Expo Router stack. Individual route groups (auth,
- * tabs) declare their own `_layout.tsx` to add per-section navigation.
+ * Two phases:
+ *   1. **Env gate** — `loadEnvOnce()` is checked first thing. If any
+ *      required env var is missing, we render `<SetupRequired>` and
+ *      stop. Nothing downstream (api/client, AuthProvider, etc.) is
+ *      mounted, so they can call `requireEnv()` freely without
+ *      defensive checks.
+ *   2. **App** — once env is valid, mount every cross-cutting provider
+ *      exactly once:
+ *        - SafeAreaProvider   — insets for notch / home indicator.
+ *        - PaperProvider      — Material Design 3 components + theme.
+ *        - QueryClientProvider — React Query for trips + heatmap data.
+ *        - AuthProvider       — bearer-token sign-in state + secure
+ *          storage.
+ *      Then renders the Expo Router stack.
  */
 import { useEffect, useMemo } from "react";
 import { useColorScheme } from "react-native";
@@ -21,6 +27,8 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import * as SplashScreen from "expo-splash-screen";
 
 import { AuthProvider } from "~/auth/AuthProvider";
+import { SetupRequired } from "~/components/SetupRequired";
+import { loadEnvOnce } from "~/config/env";
 import { darkTheme, lightTheme } from "~/theme";
 
 SplashScreen.preventAutoHideAsync().catch(() => {
@@ -31,6 +39,7 @@ SplashScreen.preventAutoHideAsync().catch(() => {
 export default function RootLayout() {
     const colorScheme = useColorScheme();
     const theme = colorScheme === "dark" ? darkTheme : lightTheme;
+    const envResult = loadEnvOnce();
 
     const queryClient = useMemo(
         () =>
@@ -51,13 +60,36 @@ export default function RootLayout() {
 
     useEffect(() => {
         // Hide the native splash screen as soon as React has mounted —
-        // the AuthProvider will swap to a Loading screen until /me
-        // resolves, but we don't want the OS splash to linger.
+        // for the env-error path we want the SetupRequired screen
+        // visible immediately; for the happy path the AuthProvider
+        // shows its own Loading until /me resolves.
         const id = setTimeout(() => {
             SplashScreen.hideAsync().catch(() => {});
         }, 0);
         return () => clearTimeout(id);
     }, []);
+
+    if (!envResult.ok) {
+        // Render Paper + SafeArea so SetupRequired can use theme tokens
+        // and proper safe-area insets, but skip Auth / QueryClient
+        // (both of which depend on the API client, which depends on
+        // env being valid).
+        return (
+            <GestureHandlerRootView style={{ flex: 1 }}>
+                <SafeAreaProvider>
+                    <PaperProvider theme={theme}>
+                        <StatusBar
+                            style={colorScheme === "dark" ? "light" : "dark"}
+                        />
+                        <SetupRequired
+                            appEnv={envResult.appEnv}
+                            missing={envResult.missing}
+                        />
+                    </PaperProvider>
+                </SafeAreaProvider>
+            </GestureHandlerRootView>
+        );
+    }
 
     return (
         <GestureHandlerRootView style={{ flex: 1 }}>

@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Time2Leave app-icon source artwork.
+
+  This is the canonical 1024x1024 brand mark used to render every PNG
+  icon variant the native app needs (iOS app icon, Android adaptive
+  icon foreground, web favicon). It mirrors the web favicon
+  (`apps/web/public/favicon.svg`) at native-icon scale:
+
+    * Rounded gradient tile, blue (#1e40af) -> orange (#ef6c00) on a
+      135-degree axis. Same ramp as the web wordmark + primary CTAs.
+    * Bold italic white "2" centered, the signature glyph from the
+      Time2Leave wordmark.
+    * A faint top-left radial highlight gives the tile the soft
+      dimensionality iOS icons read with, without any drop shadow
+      (iOS strips shadows out of the bundle anyway).
+
+  We use a system-font stack rather than Inter for the "2" because the
+  PNG renderer (resvg via sharp) doesn't have web fonts available;
+  system-ui resolves to whatever sans-serif is installed (San
+  Francisco / Helvetica / DejaVu) which all draw a recognizable bold
+  italic "2".
+
+  The "2" cap-height is sized so the glyph bounding box stays inside
+  the 66% safe-zone circle Android adaptive launchers require
+  (radius ~338 around center). Don't grow it beyond ~720 font-size or
+  Pixel / Galaxy launchers will start clipping the digit.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-label="Time2Leave">
+    <defs>
+        <linearGradient id="t2lGrad" x1="0" y1="0" x2="1024" y2="1024" gradientUnits="userSpaceOnUse">
+            <stop offset="0%" stop-color="#1e40af"/>
+            <stop offset="100%" stop-color="#ef6c00"/>
+        </linearGradient>
+        <radialGradient id="t2lHighlight" cx="280" cy="240" r="640" gradientUnits="userSpaceOnUse">
+            <stop offset="0%" stop-color="#ffffff" stop-opacity="0.22"/>
+            <stop offset="60%" stop-color="#ffffff" stop-opacity="0"/>
+        </radialGradient>
+    </defs>
+
+    <rect width="1024" height="1024" rx="224" ry="224" fill="url(#t2lGrad)"/>
+    <rect width="1024" height="1024" rx="224" ry="224" fill="url(#t2lHighlight)"/>
+
+    <!--
+      Italics are applied as an explicit `skewX` around the glyph's
+      optical center rather than `font-style="italic"`. resvg (used by
+      sharp to rasterise this SVG) doesn't synthesize italics when the
+      resolved system font lacks an italic variant, which would render
+      an upright "2" on most CI machines. A geometric skew gives us the
+      same visual lean reliably on every host.
+
+      The glyph is also nudged a few px upward (y=512 instead of the
+      geometric centre 544 of the text baseline) so the "2"'s heavier
+      bottom curve sits on the optical centre of the tile.
+    -->
+    <g transform="translate(512 512) skewX(-18) translate(-512 -512)">
+        <text
+            x="512"
+            y="512"
+            text-anchor="middle"
+            dominant-baseline="central"
+            font-family="'Helvetica Neue', Helvetica, 'Arial Black', Arial, sans-serif"
+            font-size="780"
+            font-weight="900"
+            fill="#ffffff"
+            letter-spacing="-0.04em"
+        >2</text>
+    </g>
+</svg>

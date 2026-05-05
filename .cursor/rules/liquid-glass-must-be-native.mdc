@@ -1,0 +1,54 @@
+---
+description: Liquid Glass must always be real native iOS — never JS look-alikes
+alwaysApply: true
+---
+
+# Liquid Glass = real native, always
+
+When the user mentions "liquid glass", "glass", "glassy", "frosted",
+"blur" in a UI context, or asks to make something feel native on
+iOS 26+: render **real** Liquid Glass via Apple's framework. Never
+fake it in JS.
+
+## ✅ Approved primitives (already installed in this repo)
+
+- `@expo/ui/swift-ui` — `Host`, `ZStack`, `HStack`, `Capsule`,
+  `RoundedRectangle`, `Button`, `Text`.
+- `@expo/ui/swift-ui/modifiers` — `glassEffect({ glass: { variant,
+  tint }, shape })`, `buttonStyle('glass' | 'glassProminent')`,
+  `animation(Animation.spring(...), value)` for sliding/morphing.
+- `expo-glass-effect` — `GlassView` + `isGlassEffectAPIAvailable()`
+  for nav-bar / overlay backgrounds.
+- See `apps/mobile/src/components/native/IOSSegmentedControl.tsx`
+  and `apps/mobile/src/components/native/Glass.tsx` for the
+  reference patterns this project uses.
+
+## ❌ Forbidden — never ship these as "glass"
+
+- `backgroundColor: "rgba(...)"` + a `LinearGradient` overlay
+  pretending to refract.
+- React Native `BlurView` / `expo-blur` as a stand-in for Liquid
+  Glass on iOS (it's iOS 7-era `UIVisualEffectView`, not iOS 26
+  Liquid Glass).
+- Any custom JS-drawn pill / track / thumb that *imitates* the
+  glass material with shadows + translucent tints.
+- `UISegmentedControl` / `@expo/ui` `Picker('segmented')` for
+  Liquid Glass — known broken on iOS 26 (`expo/expo#44739`,
+  renders the legacy bordered style). Compose from `Capsule` +
+  `glassEffect` instead.
+
+## Required workflow when adding glass
+
+1. Render the SwiftUI inside `<Host>` (real `UIHostingController`).
+2. Apply `glassEffect({ glass: { variant: "regular", tint? } })`
+   — never simulate.
+3. Gate with `isGlassEffectAPIAvailable()` only for the
+   *fallback path* on iOS < 26 / Android — always ship the real
+   thing on iOS 26+.
+4. If `@expo/ui` is missing a primitive you need, install it via
+   `npx expo install` and run `npx expo prebuild --platform ios`
+   + rebuild — do **not** invent a JS substitute.
+
+If you catch yourself reaching for `rgba()`, `LinearGradient`,
+`BlurView`, or a "fake glass" `View`, stop and use the SwiftUI
+path instead.

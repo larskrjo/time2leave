@@ -1,12 +1,12 @@
 # Store release checklist (iOS + Android)
 
-This file tracks the human-only parts of shipping `time2leave` to the
-App Store and Google Play. Everything else (build config, signing,
+This file tracks the human-only parts of shipping **Time2Leave** to
+the App Store and Google Play. Everything else (build config, signing,
 upload) is automated through EAS — see [`eas.json`](eas.json).
 
 The bundle ID `com.time2leave.app` is already reserved in
-[`app.json`](app.json) for both platforms; the steps below register
-it on each store and produce a first internal build.
+[`app.config.ts`](app.config.ts) for both platforms; the steps below
+register it on each store and produce a first internal build.
 
 ## 1. Reserve the bundle ID
 
@@ -17,7 +17,7 @@ it on each store and produce a first internal build.
 2. **Apps → +** → **New App**.
 3. Fill in:
     - Platforms: **iOS**
-    - Name: `time2leave`
+    - Name: `Time2Leave`
     - Primary language: English (U.S.)
     - Bundle ID: **`com.time2leave.app`** (use the dropdown — if it's
       not there, add it via <https://developer.apple.com/account/resources/identifiers/list>
@@ -31,7 +31,7 @@ it on each store and produce a first internal build.
 
 1. Log in to <https://play.google.com/console>.
 2. **Create app**:
-    - App name: `time2leave`
+    - App name: `Time2Leave`
     - Default language: English (United States)
     - App or game: App
     - Free or paid: Free
@@ -44,20 +44,16 @@ it on each store and produce a first internal build.
 
 ## 2. Assets
 
-Add the following files to `apps/mobile/assets/` (PNG, transparent
-background unless noted):
+App icon, adaptive-icon, splash, and favicon PNGs all live in
+[`apps/mobile/assets/`](assets/) and are generated from a single SVG
+source — see [`assets/README.md`](assets/README.md). They are already
+wired into [`app.config.ts`](app.config.ts) (`icon`, `splash` plugin,
+`android.adaptiveIcon`, `web.favicon`), so the only action item here
+is to regenerate them after any brand-mark changes:
 
-| File | Size | Notes |
-| --- | --- | --- |
-| `icon.png` | 1024×1024 | Square. Used as the source for every iOS icon variant. |
-| `adaptive-icon.png` | 1024×1024 | Foreground for Android adaptive icon. Inside-the-safe-zone art only. |
-| `splash-icon.png` | 1284×2778 (or 1× variant) | Vertical centered logo for the launch screen. |
-| `favicon.png` | 48×48 | Web bundle favicon. |
-
-Once the files exist, re-add the `icon`, `splash`, and
-`android.adaptiveIcon` blocks to `app.json` (they were trimmed during
-scaffolding so the app starts on a fresh checkout without binary
-assets).
+```bash
+npm --prefix apps/mobile run icons
+```
 
 Marketing screenshots (uploaded directly in App Store Connect / Play
 Console; not committed to git):

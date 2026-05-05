@@ -37,6 +37,7 @@ def patched_app(monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
         user = User(
             id=len(store) + 1,
             google_sub=identity.sub,
+            apple_sub=None,
             email=identity.email,
             name=identity.name,
             picture_url=identity.picture,
@@ -78,6 +79,7 @@ def patched_app(monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
         User(
             id=1,
             google_sub="pre-seed",
+            apple_sub=None,
             email="allowed@example.com",
             name="Allowed",
             picture_url=None,

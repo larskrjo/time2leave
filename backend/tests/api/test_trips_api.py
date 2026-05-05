@@ -24,6 +24,7 @@ def logged_in_user() -> User:
     return User(
         id=99,
         google_sub="sub-99",
+        apple_sub=None,
         email="user@example.com",
         name="Test User",
         picture_url=None,

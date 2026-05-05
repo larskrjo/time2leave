@@ -1,155 +1,448 @@
 /**
- * Splash + sign-in screen.
+ * Splash + sign-in screen (signed-out only).
  *
- * Mirrors the web splash (`apps/web/app/routes/splash.tsx`) at a phone
- * scale: hero copy, a "What you'll see" preview chip, and the sign-in
- * CTA. Authenticated users are redirected to `/trips` immediately.
+ * Structure mirrors the iOS first-run pattern (e.g. Apple's "Welcome
+ * to Freeform" sheet): a tall hero preview that *shows what the
+ * product is* sits at the top, a compact brand + headline + paragraph
+ * block sits below it, and a single full-width pill CTA is pinned to
+ * the bottom safe-area inset.
  *
- * Sign-in flows:
- *   - Production: Google sign-in via `@react-native-google-signin`,
- *     wired up in `~/auth/googleSignIn.ts` and exposed here through
- *     `<GoogleSignInButton>`.
- *   - Local dev (`EXPO_PUBLIC_ENABLE_DEV_LOGIN=true`): a small
- *     "Continue as dev user" button posts to /auth/dev-login so we
- *     don't need a real GCP project to iterate on the app.
+ * Why a `View` (not `ScrollView`)?
+ * The whole screen fits inside one device viewport on every supported
+ * iPhone (SE 3rd-gen and up) and Android phone — there is *nothing*
+ * to scroll to, so a ScrollView would only enable iOS's rubber-band
+ * bounce that makes the screen feel like an unfinished web page.
+ * The hero card is the single flexible region: it absorbs whatever
+ * vertical slack the device has, so the same layout reads well from
+ * 5.4" SE up to 6.9" Pro Max without bottoming out.
+ *
+ * Sign-in is gated strictly by `EXPO_PUBLIC_APP_ENV`:
+ *   - `local` → only the dev-login button is shown. Posts to
+ *     /api/v1/auth/dev-login with `EXPO_PUBLIC_DEV_LOGIN_EMAIL`,
+ *     which must be on the backend's auth allowlist.
+ *   - `prod`  → only the native Google Sign-In button is shown.
+ *
+ * Authenticated users are redirected straight to /trips so this
+ * screen never flashes for someone who already has a session.
  */
-import { useEffect } from "react";
-import { ScrollView, View } from "react-native";
+import { useState } from "react";
+import { View } from "react-native";
 import { Redirect } from "expo-router";
-import {
-    Button,
-    Card,
-    HelperText,
-    Text,
-    useTheme,
-} from "react-native-paper";
+import { Text, useTheme } from "react-native-paper";
 import { LinearGradient } from "expo-linear-gradient";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
+import { colorFor, formatSlot12h, minutesLabel } from "@time2leave/shared";
+
+import { AppleSignInButton } from "~/auth/AppleSignInButton";
 import { useAuth } from "~/auth/AuthProvider";
 import { GoogleSignInButton } from "~/auth/GoogleSignInButton";
 import { Loading } from "~/components/Loading";
 import { Wordmark } from "~/components/Wordmark";
+import { GlassPill } from "~/components/native/Glass";
+import { Symbol } from "~/components/native/Symbol";
+import { requireEnv } from "~/config/env";
 import { BRAND_GRADIENT } from "~/theme";
-
-const DEV_LOGIN_ENABLED =
-    (process.env.EXPO_PUBLIC_ENABLE_DEV_LOGIN ?? "").toLowerCase() === "true";
-const DEV_LOGIN_EMAIL =
-    process.env.EXPO_PUBLIC_DEV_LOGIN_EMAIL ?? "dev@example.com";
 
 export default function Splash() {
     const theme = useTheme();
     const insets = useSafeAreaInsets();
     const { status, signInDev } = useAuth();
+    const env = requireEnv();
 
-    if (status === "loading") return <Loading label="Restoring session..." />;
+    // The only sign-in error we ever surface: the backend's 403
+    // when an authenticated user isn't on the invite allowlist.
+    // Cancellations / network blips / provider errors all dismiss
+    // silently inside the buttons themselves — see comments in
+    // {Apple,Google}SignInButton.tsx for the full UX rule.
+    const [allowlistRejected, setAllowlistRejected] = useState(false);
+
+    if (status === "loading") return <Loading label="Restoring session…" />;
     if (status === "authenticated") return <Redirect href="/trips" />;
 
     return (
-        <ScrollView
-            contentContainerStyle={{
-                paddingTop: insets.top + 12,
-                paddingBottom: insets.bottom + 32,
+        <View
+            style={{
+                flex: 1,
+                backgroundColor: theme.colors.background,
+                paddingTop: insets.top,
+                paddingBottom: insets.bottom + 16,
                 paddingHorizontal: 20,
-                gap: 24,
             }}
         >
-            <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
-                <Wordmark />
-            </View>
+            {/* One vertically-centered composition: hero card → brand
+                stack → CTA → disclaimer. Putting the CTA *inside* the
+                centered group (instead of pinning it to the bottom
+                safe-area inset) keeps the title in roughly the same
+                vertical position as before *and* lifts the sign-in
+                button up so it sits right under the description —
+                the obvious next action, not a floating afterthought
+                near the home indicator. */}
+            <View
+                style={{
+                    flex: 1,
+                    justifyContent: "center",
+                    gap: 24,
+                }}
+            >
+                <HeatmapPreviewCard />
 
-            <View style={{ gap: 12, marginTop: 16 }}>
-                <Text
-                    variant="labelMedium"
-                    style={{ color: theme.colors.primary, letterSpacing: 1.2 }}
-                >
-                    KNOW WHEN TO LEAVE
-                </Text>
-                <Text variant="displaySmall" style={{ fontWeight: "800" }}>
-                    Stop guessing{"\n"}when to leave.
-                </Text>
-                <Text
-                    variant="bodyLarge"
-                    style={{ color: theme.colors.onSurfaceVariant }}
-                >
-                    Save a trip between any two addresses. We build a heatmap of
-                    real drive times in 15-minute intervals across the whole week —
-                    both directions, weekends included.
-                </Text>
-            </View>
-
-            <Card mode="elevated" style={{ borderRadius: 16 }}>
-                <Card.Content style={{ gap: 12, paddingVertical: 16 }}>
+                <View style={{ gap: 12, alignItems: "center" }}>
+                    <Wordmark size={44} />
                     <Text
-                        variant="labelMedium"
-                        style={{ color: theme.colors.primary, letterSpacing: 1.2 }}
+                        variant="headlineSmall"
+                        style={{
+                            fontWeight: "800",
+                            textAlign: "center",
+                            letterSpacing: -0.5,
+                            color: theme.colors.onBackground,
+                        }}
                     >
-                        GET STARTED
+                        Know exactly when to leave.
                     </Text>
-                    <Text variant="titleMedium" style={{ fontWeight: "700" }}>
-                        Sign in to save your first trip
+                    <Text
+                        variant="bodyMedium"
+                        style={{
+                            color: theme.colors.onSurfaceVariant,
+                            textAlign: "center",
+                            lineHeight: 20,
+                            paddingHorizontal: 8,
+                        }}
+                    >
+                        Save a trip and we measure real drive times every
+                        15 minutes for the whole week — both directions.
                     </Text>
+                </View>
 
-                    <GoogleSignInButton />
-
-                    {DEV_LOGIN_ENABLED ? (
-                        <Button
-                            mode="outlined"
+                <View style={{ width: "100%", gap: 10 }}>
+                    {env.appEnv === "prod" ? (
+                        <>
+                            {/* Apple HIG mandates that "Sign in with
+                                Apple" is at least as prominent as
+                                other third-party sign-in options on
+                                iOS, so it sits above Google. The
+                                button itself returns null on Android,
+                                where Google remains the only path. */}
+                            <AppleSignInButton
+                                style={CTA_BUTTON_STYLE}
+                                onAttemptStart={() =>
+                                    setAllowlistRejected(false)
+                                }
+                                onAllowlistRejected={() =>
+                                    setAllowlistRejected(true)
+                                }
+                            />
+                            <GoogleSignInButton
+                                style={CTA_BUTTON_STYLE}
+                                contentStyle={CTA_BUTTON_CONTENT_STYLE}
+                                labelStyle={CTA_BUTTON_LABEL_STYLE}
+                                onAttemptStart={() =>
+                                    setAllowlistRejected(false)
+                                }
+                                onAllowlistRejected={() =>
+                                    setAllowlistRejected(true)
+                                }
+                            />
+                        </>
+                    ) : (
+                        <GlassPill
+                            tone="accent"
                             onPress={() => {
-                                void signInDev(DEV_LOGIN_EMAIL, "Dev User");
+                                void signInDev(env.devLoginEmail, "Dev User");
                             }}
-                            style={{ marginTop: 4 }}
+                            accessibilityLabel={`Continue as ${env.devLoginEmail}`}
                         >
-                            Continue as {DEV_LOGIN_EMAIL}
-                        </Button>
-                    ) : null}
+                            <Symbol
+                                name={{
+                                    ios: "person.crop.circle.badge.checkmark",
+                                    android: "account-arrow-right",
+                                }}
+                                size={18}
+                                color={theme.colors.onBackground}
+                                weight="semibold"
+                            />
+                            <Text
+                                style={{
+                                    color: theme.colors.onBackground,
+                                    fontSize: 16,
+                                    fontWeight: "700",
+                                    letterSpacing: 0.2,
+                                }}
+                            >
+                                Continue as {env.devLoginEmail}
+                            </Text>
+                        </GlassPill>
+                    )}
 
-                    <HelperText type="info" visible padding="none">
-                        Invite-only today — your email needs to be on the allowlist.
-                        Ask the owner to add you.
-                    </HelperText>
-                </Card.Content>
-            </Card>
-
-            <PreviewBanner />
-        </ScrollView>
+                    {/* Subtext slot under the CTAs: defaults to the
+                        invite-only disclaimer; swaps to an
+                        error-tinted message when the backend
+                        rejected the user post-provider-auth. The
+                        error replaces (rather than stacks with) the
+                        disclaimer so the user reads exactly one
+                        thing at a time. */}
+                    {allowlistRejected ? (
+                        <Text
+                            variant="bodySmall"
+                            style={{
+                                color: theme.colors.error,
+                                textAlign: "center",
+                                paddingHorizontal: 8,
+                                fontWeight: "600",
+                            }}
+                            accessibilityLiveRegion="polite"
+                        >
+                            You're not on the invite list. Ask the owner
+                            to add you and try again.
+                        </Text>
+                    ) : (
+                        <Text
+                            variant="bodySmall"
+                            style={{
+                                color: theme.colors.onSurfaceVariant,
+                                textAlign: "center",
+                                paddingHorizontal: 8,
+                            }}
+                        >
+                            {env.appEnv === "prod"
+                                ? "Invite-only — your email must be on the allowlist."
+                                : "Dev mode — the email above must be on the backend's allowlist."}
+                        </Text>
+                    )}
+                </View>
+            </View>
+        </View>
     );
 }
 
-function PreviewBanner() {
+/**
+ * Big rounded "pill" CTA — Apple-style first-run button. We share the
+ * same shape across both auth paths (Google + dev-login) so the
+ * sign-in moment looks identical regardless of which build target the
+ * user is in.
+ *
+ * `CTA_BUTTON_LABEL_STYLE` is sized to match Apple's
+ * `ASAuthorizationAppleIDButton` typography. Apple's framework
+ * auto-scales the button label as a function of `cornerRadius`
+ * (roughly `cornerRadius * 0.7`), so at our 28pt corner radius the
+ * Apple label renders at ≈19pt SF Pro *medium*. There is no public
+ * API to override that — the only way to make "Continue with Google"
+ * read as a balanced pair next to it is to size our custom Google
+ * pill to the same metrics. Plain semibold (`"600"`) here looked
+ * visibly heavier than Apple's label and made the two CTAs feel
+ * mismatched, so we use medium (`"500"`) for the same reason.
+ */
+const CTA_BUTTON_STYLE = { borderRadius: 28 } as const;
+const CTA_BUTTON_CONTENT_STYLE = { paddingVertical: 10 } as const;
+const CTA_BUTTON_LABEL_STYLE = {
+    fontSize: 20,
+    fontWeight: "500" as const,
+    letterSpacing: 0,
+};
+
+/**
+ * Mini-heatmap preview that doubles as the splash hero. Shows the
+ * exact visual the user will get inside the app — five weekdays of
+ * fake-but-plausible drive-time samples (slow morning rush, fast
+ * midday, slow evening rush) coloured by the *real* `colorFor`
+ * function from `@time2leave/shared`, so the gradient on this card
+ * is byte-identical to the one they'll see on their first trip.
+ *
+ * The card is wrapped in a soft brand-gradient backdrop and a thin
+ * outline so it reads as "the product, miniaturised" rather than
+ * marketing chrome.
+ */
+function HeatmapPreviewCard() {
     const theme = useTheme();
-    useEffect(() => {
-        // Marker so future tweaks remember the gradient is intentional.
-        return () => undefined;
-    }, []);
+
+    // Five-day × five-slot fake samples. Numbers are minutes; the
+    // pattern is a typical commute: morning rush slow → midday fast
+    // → evening rush slow. The grid only has to *feel* real on first
+    // glance; once the user signs in they get their own data.
+    const PREVIEW_SLOTS = ["07:30", "09:00", "12:00", "15:30", "17:30"] as const;
+    const PREVIEW_DATA = [
+        { day: "Mon", values: [38, 22, 14, 18, 41] },
+        { day: "Tue", values: [36, 21, 13, 19, 39] },
+        { day: "Wed", values: [40, 24, 15, 17, 43] },
+        { day: "Thu", values: [37, 23, 14, 20, 38] },
+        { day: "Fri", values: [42, 26, 16, 22, 47] },
+    ] as const;
+    const allValues = PREVIEW_DATA.flatMap((row) => row.values);
+    const minMinutes = Math.min(...allValues);
+    const maxMinutes = Math.max(...allValues);
+
     return (
-        <View
-            style={{
-                borderRadius: 16,
-                overflow: "hidden",
-                borderWidth: 1,
-                borderColor: theme.colors.outline,
-            }}
-        >
+        <View style={{ width: "100%", alignItems: "center" }}>
+            {/* Soft gradient halo behind the card — same blue→orange
+                ramp as the wordmark, knocked back to ~10% so it tints
+                the corners without competing with the cells. */}
             <LinearGradient
-                colors={[`${BRAND_GRADIENT[0]}10`, `${BRAND_GRADIENT[1]}10`]}
+                colors={[`${BRAND_GRADIENT[0]}1A`, `${BRAND_GRADIENT[1]}1A`]}
                 start={{ x: 0, y: 0 }}
                 end={{ x: 1, y: 1 }}
-                style={{ padding: 20, gap: 8 }}
+                style={{
+                    width: "100%",
+                    borderRadius: 24,
+                    padding: 14,
+                }}
             >
-                <Text
-                    variant="labelMedium"
-                    style={{ color: theme.colors.primary, letterSpacing: 1.2 }}
+                <View
+                    style={{
+                        backgroundColor: theme.colors.surface,
+                        borderRadius: 16,
+                        borderWidth: 1,
+                        borderColor: theme.colors.outline,
+                        padding: 12,
+                        gap: 8,
+                    }}
                 >
-                    HOW IT WORKS
-                </Text>
-                <Text variant="titleMedium" style={{ fontWeight: "700" }}>
-                    Save a trip → Sample drive times → Read the heatmap
-                </Text>
-                <Text variant="bodyMedium" style={{ color: theme.colors.onSurfaceVariant }}>
-                    A real heatmap: 7 days × 15-minute slots, both directions.
-                    Green = fast, red = sit in traffic.
-                </Text>
+                    {/* Faux "trip card" header so the preview reads as a
+                        real saved trip, not just a swatch grid. */}
+                    <View
+                        style={{
+                            flexDirection: "row",
+                            alignItems: "center",
+                            justifyContent: "space-between",
+                            paddingHorizontal: 4,
+                            paddingBottom: 4,
+                        }}
+                    >
+                        <Text
+                            variant="labelLarge"
+                            style={{ fontWeight: "800", color: theme.colors.onSurface }}
+                        >
+                            Home → Office
+                        </Text>
+                        <View
+                            style={{
+                                paddingHorizontal: 8,
+                                paddingVertical: 2,
+                                borderRadius: 999,
+                                backgroundColor: `${BRAND_GRADIENT[0]}1F`,
+                            }}
+                        >
+                            <Text
+                                variant="labelSmall"
+                                style={{
+                                    color: BRAND_GRADIENT[0],
+                                    fontWeight: "700",
+                                    letterSpacing: 0.4,
+                                }}
+                            >
+                                THIS WEEK
+                            </Text>
+                        </View>
+                    </View>
+
+                    {/* Column header — slot times across the top. */}
+                    <View style={{ flexDirection: "row", gap: 4, paddingLeft: 36 }}>
+                        {PREVIEW_SLOTS.map((slot) => (
+                            <Text
+                                key={slot}
+                                variant="labelSmall"
+                                style={{
+                                    flex: 1,
+                                    textAlign: "center",
+                                    color: theme.colors.onSurfaceVariant,
+                                    fontVariant: ["tabular-nums"],
+                                }}
+                            >
+                                {formatSlot12h(slot)}
+                            </Text>
+                        ))}
+                    </View>
+
+                    {/* The grid itself. */}
+                    <View style={{ gap: 4 }}>
+                        {PREVIEW_DATA.map((row) => (
+                            <View
+                                key={row.day}
+                                style={{ flexDirection: "row", alignItems: "center", gap: 4 }}
+                            >
+                                <Text
+                                    variant="labelMedium"
+                                    style={{
+                                        width: 32,
+                                        fontWeight: "800",
+                                        color: theme.colors.onSurface,
+                                    }}
+                                >
+                                    {row.day}
+                                </Text>
+                                {row.values.map((minutes, i) => (
+                                    <View
+                                        key={`${row.day}-${i}`}
+                                        style={{
+                                            flex: 1,
+                                            paddingVertical: 8,
+                                            borderRadius: 8,
+                                            alignItems: "center",
+                                            backgroundColor: colorFor(
+                                                minutes,
+                                                minMinutes,
+                                                maxMinutes,
+                                            ),
+                                        }}
+                                    >
+                                        <Text
+                                            style={{
+                                                fontSize: 11,
+                                                fontWeight: "800",
+                                                color: "#0b1020",
+                                                fontVariant: ["tabular-nums"],
+                                            }}
+                                        >
+                                            {minutesLabel(minutes)}
+                                        </Text>
+                                    </View>
+                                ))}
+                            </View>
+                        ))}
+                    </View>
+
+                    {/* Tiny legend so first-time viewers know what the
+                        colour scale means without having to guess. */}
+                    <View
+                        style={{
+                            flexDirection: "row",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            gap: 6,
+                            paddingTop: 4,
+                        }}
+                    >
+                        <Text
+                            variant="labelSmall"
+                            style={{ color: theme.colors.onSurfaceVariant }}
+                        >
+                            Faster
+                        </Text>
+                        <LinearGradient
+                            colors={[
+                                colorFor(minMinutes, minMinutes, maxMinutes),
+                                colorFor(
+                                    (minMinutes + maxMinutes) / 2,
+                                    minMinutes,
+                                    maxMinutes,
+                                ),
+                                colorFor(maxMinutes, minMinutes, maxMinutes),
+                            ]}
+                            start={{ x: 0, y: 0 }}
+                            end={{ x: 1, y: 0 }}
+                            style={{
+                                height: 6,
+                                width: 96,
+                                borderRadius: 3,
+                            }}
+                        />
+                        <Text
+                            variant="labelSmall"
+                            style={{ color: theme.colors.onSurfaceVariant }}
+                        >
+                            Slower
+                        </Text>
+                    </View>
+                </View>
             </LinearGradient>
         </View>
     );

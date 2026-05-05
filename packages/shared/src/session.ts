@@ -45,7 +45,11 @@ export async function fetchAuthConfig(
     try {
         return await apiFetch<AuthConfig>(paths.authConfig);
     } catch {
-        return { google_oauth_client_id: null, dev_login_enabled: false };
+        return {
+            google_oauth_client_id: null,
+            apple_sign_in_enabled: false,
+            dev_login_enabled: false,
+        };
     }
 }
 
@@ -59,6 +63,31 @@ export async function loginWithGoogleCredential(
     return apiFetch<AuthedUserResponse>(paths.authGoogle, {
         method: "POST",
         body: JSON.stringify({ credential }),
+        ...init,
+    });
+}
+
+/**
+ * Exchange an Apple Sign-In identity token (and optional first-run
+ * display name) for a session.
+ *
+ * `name` is *only* present on the user's first authorization for the
+ * app — Apple's privacy design hides it on subsequent sign-ins. The
+ * mobile client should pass it through verbatim from the
+ * `expo-apple-authentication` response so the backend can persist
+ * the user's preferred display name on first sign-up.
+ */
+export async function loginWithAppleCredential(
+    apiFetch: ApiFetch,
+    paths: ApiPaths,
+    identityToken: string,
+    name: string | null,
+    opts?: LoginOptions,
+): Promise<AuthedUserResponse> {
+    const init = tokenInit(opts);
+    return apiFetch<AuthedUserResponse>(paths.authApple, {
+        method: "POST",
+        body: JSON.stringify({ identity_token: identityToken, name }),
         ...init,
     });
 }

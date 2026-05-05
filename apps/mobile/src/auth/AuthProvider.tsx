@@ -32,6 +32,7 @@ import {
     fetchMe as sharedFetchMe,
     isApiError,
     loginDev as sharedLoginDev,
+    loginWithAppleCredential as sharedLoginWithAppleCredential,
     loginWithGoogleCredential as sharedLoginWithGoogleCredential,
     logout as sharedLogout,
     type AuthConfig,
@@ -39,7 +40,7 @@ import {
     type SessionUser,
 } from "@time2leave/shared";
 
-import { API, apiFetch } from "~/api/client";
+import { apiFetch, getApi } from "~/api/client";
 import {
     clearStoredSession,
     readStoredSession,
@@ -55,6 +56,10 @@ type AuthContextValue = {
     authConfig: AuthConfig | null;
     refresh: () => Promise<void>;
     signInWithGoogle: (idToken: string) => Promise<SessionUser>;
+    signInWithApple: (
+        identityToken: string,
+        name: string | null,
+    ) => Promise<SessionUser>;
     signInDev: (email: string, name?: string) => Promise<SessionUser>;
     signOut: () => Promise<void>;
 };
@@ -80,7 +85,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     const refresh = useCallback(async () => {
         try {
-            const me = await sharedFetchMe(apiFetch, API);
+            const me = await sharedFetchMe(apiFetch, getApi());
             setUser(me);
             setStatus(me ? "authenticated" : "anonymous");
             if (me === null) {
@@ -106,7 +111,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             const stored = await readStoredSession();
             if (stored) setCurrentToken(stored.token);
             const [config] = await Promise.all([
-                sharedFetchAuthConfig(apiFetch, API),
+                sharedFetchAuthConfig(apiFetch, getApi()),
             ]);
             setAuthConfig(config);
             await refresh();
@@ -116,7 +121,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const signInWithGoogle = useCallback(async (idToken: string) => {
         const authed = await sharedLoginWithGoogleCredential(
             apiFetch,
-            API,
+            getApi(),
             idToken,
             { wantsToken: true },
         );
@@ -133,10 +138,34 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         return me;
     }, []);
 
+    const signInWithApple = useCallback(
+        async (identityToken: string, name: string | null) => {
+            const authed = await sharedLoginWithAppleCredential(
+                apiFetch,
+                getApi(),
+                identityToken,
+                name,
+                { wantsToken: true },
+            );
+            persistAndAdoptToken(authed);
+            const me: SessionUser = {
+                id: authed.id,
+                email: authed.email,
+                name: authed.name,
+                picture_url: authed.picture_url,
+                is_admin: authed.is_admin,
+            };
+            setUser(me);
+            setStatus("authenticated");
+            return me;
+        },
+        [],
+    );
+
     const signInDev = useCallback(async (email: string, name?: string) => {
         const authed = await sharedLoginDev(
             apiFetch,
-            API,
+            getApi(),
             email,
             name,
             { wantsToken: true },
@@ -158,7 +187,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         // Best-effort: still clear local state if the network call fails
         // (e.g. user signs out while offline).
         try {
-            await sharedLogout(apiFetch, API);
+            await sharedLogout(apiFetch, getApi());
         } catch {
             // intentional swallow
         }
@@ -175,10 +204,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             authConfig,
             refresh,
             signInWithGoogle,
+            signInWithApple,
             signInDev,
             signOut,
         }),
-        [status, user, authConfig, refresh, signInWithGoogle, signInDev, signOut],
+        [
+            status,
+            user,
+            authConfig,
+            refresh,
+            signInWithGoogle,
+            signInWithApple,
+            signInDev,
+            signOut,
+        ],
     );
 
     return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

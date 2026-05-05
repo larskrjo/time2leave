@@ -43,21 +43,19 @@ services:
         condition: service_healthy
     ports:
       - "${API_HOST_PORT:-8000}:8000"
+    # Single source of truth: edit backend/.env, then `docker compose ...
+    # restart api`. Anything not set in .env falls back to defaults baked
+    # into app/config.py.
+    env_file:
+      - .env
     environment:
-      APP_ENV: local
+      # Container-internal overrides only — these need different values
+      # in-container than what backend/.env says for host-side tooling.
+      # The api container talks to the mysql container by service name
+      # on the standard 3306 port; the host-side .env points at
+      # localhost:${MYSQL_HOST_PORT:-3307} for psql/mysql clients.
       MYSQL_HOST: mysql
       MYSQL_PORT: "3306"
-      MYSQL_USER: root
-      MYSQL_PASSWORD: Abcd1234
-      MYSQL_DATABASE: time2leave
-      DATA_PROVIDER: fixture
-      # Auth: dev-login is enabled and the seeded dev user is admin +
-      # allowlisted. Override SESSION_SECRET if you want stable cookies
-      # across container restarts.
-      SESSION_SECRET: local-dev-secret-not-for-production
-      ENABLE_DEV_LOGIN: "true"
-      ADMIN_EMAILS: dev@example.com
-      AUTH_ALLOWLIST_BOOTSTRAP: dev@example.com
     volumes:
       - ./app:/app/app
       - ./db:/app/db:ro

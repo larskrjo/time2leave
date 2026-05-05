@@ -53,6 +53,22 @@ class Settings(BaseSettings):
     # `Settings.google_oauth_client_ids`). Backwards compatible: a
     # plain `client-id` env value just yields a single-element list.
     google_oauth_client_id: str | None = None
+    # Apple Sign In audience.
+    #
+    # Unlike Google OAuth, Apple Sign In does not require a client
+    # secret on the backend — Apple identity tokens are JWTs we verify
+    # with Apple's published JWKs. We just need to know *which* `aud`
+    # claim to accept, which for native iOS sign-in is the iOS app's
+    # bundle ID (e.g. `com.time2leave.app`).
+    #
+    # If you ever add Sign-in-with-Apple to the *web* (via the
+    # https://appleid.apple.com/auth/authorize popup), you'd register
+    # a separate Service ID with Apple and accept that `aud` too. For
+    # now we only support the native iOS path, so this is a single
+    # string. Defaults to the project's iOS bundle ID so local dev
+    # works out of the box; prod can override via env or AWS Secrets
+    # Manager (`apple_oauth_client_id` key).
+    apple_oauth_client_id: str | None = "com.time2leave.app"
     session_secret: str = "dev-only-change-me"
     session_cookie_name: str = "tlh_session"
     session_ttl_hours: int = 24 * 7
@@ -178,6 +194,47 @@ def _apply_legacy_env_aliases() -> None:
         os.environ["APP_ENV"] = legacy
 
 
+# Quota envelope applied automatically when `app_env == "local"`.
+#
+# Production defaults are intentionally tiny (1 trip per user, 1
+# mutation per week) because every cap-affecting action triggers a
+# Routes Matrix backfill (~840 elements ≈ $8). Locally the data
+# provider defaults to "fixture" so every backfill is free, which
+# means the only real cost of bumping the caps is "the developer can
+# now make 100 trips on their dev box without manually tweaking env
+# vars". Each entry below is the (Settings attribute, dev-friendly
+# value, env-var name); the env-var name is what the operator would
+# set in `backend/.env` to override this overlay.
+_LOCAL_DEV_QUOTA_OVERRIDES: tuple[tuple[str, int, str], ...] = (
+    ("max_trips_per_user", 100, "MAX_TRIPS_PER_USER"),
+    ("max_trips_per_admin", 100, "MAX_TRIPS_PER_ADMIN"),
+    ("max_trips_total", 1_000, "MAX_TRIPS_TOTAL"),
+    ("max_trip_mutations_per_week", 100, "MAX_TRIP_MUTATIONS_PER_WEEK"),
+)
+
+
+def _apply_local_dev_quotas(settings: Settings) -> None:
+    """Bump per-user trip + mutation caps when running locally.
+
+    Skipped if the operator has explicitly set the corresponding env
+    var (so a contributor who *wants* to test prod-style caps locally
+    can do `MAX_TRIPS_PER_USER=1 uvicorn …` without this overlay
+    silently undoing it).
+
+    Note that `.env`-file values are loaded by pydantic-settings
+    *internally* and don't appear in `os.environ`, so they don't count
+    as "explicit" here. If you want to opt out via .env, set the value
+    in .env *and* export it; or just leave the overlay alone and
+    benefit from the bumped caps that the dev workflow needs anyway.
+    """
+    if settings.app_env != "local":
+        return
+    for attr, dev_value, env_name in _LOCAL_DEV_QUOTA_OVERRIDES:
+        if env_name in os.environ:
+            continue
+        setattr(settings, attr, dev_value)
+
+
 def _load_from_aws_secrets_manager(settings: Settings) -> None:
     """Overlay MySQL + Google credentials from AWS Secrets Manager.
 
@@ -212,6 +269,8 @@ def _load_from_aws_secrets_manager(settings: Settings) -> None:
             settings.data_provider = "google"
     if "google_oauth_client_id" in payload:
         settings.google_oauth_client_id = payload["google_oauth_client_id"]
+    if "apple_oauth_client_id" in payload:
+        settings.apple_oauth_client_id = payload["apple_oauth_client_id"]
     if "session_secret" in payload:
         settings.session_secret = payload["session_secret"]
 
@@ -236,6 +295,7 @@ def get_settings() -> Settings:
             "Running in %s mode; skipping AWS Secrets Manager and using env/defaults",
             settings.app_env,
         )
+        _apply_local_dev_quotas(settings)
 
     return settings
 

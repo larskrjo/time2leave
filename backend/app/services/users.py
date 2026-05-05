@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from app.auth.apple import AppleIdentity
 from app.auth.google import GoogleIdentity
 from app.db.db import Database
 
@@ -11,18 +12,19 @@ from app.db.db import Database
 @dataclass(frozen=True)
 class User:
     id: int
-    google_sub: str
+    google_sub: str | None
+    apple_sub: str | None
     email: str
     name: str | None
     picture_url: str | None
 
 
+_USER_COLUMNS = "id, google_sub, apple_sub, email, name, picture_url"
+
+
 def get_user_by_id(user_id: int) -> User | None:
     """Lookup a user by primary key. Returns None if not found."""
-    query = (
-        "SELECT id, google_sub, email, name, picture_url "
-        "FROM users WHERE id = %s"
-    )
+    query = f"SELECT {_USER_COLUMNS} FROM users WHERE id = %s"
     with Database() as cursor:
         cursor.execute(query, (user_id,))
         row = cursor.fetchone()
@@ -31,10 +33,7 @@ def get_user_by_id(user_id: int) -> User | None:
 
 def get_user_by_email(email: str) -> User | None:
     """Lookup a user by lowercased email."""
-    query = (
-        "SELECT id, google_sub, email, name, picture_url "
-        "FROM users WHERE email = %s"
-    )
+    query = f"SELECT {_USER_COLUMNS} FROM users WHERE email = %s"
     with Database() as cursor:
         cursor.execute(query, (email.lower(),))
         row = cursor.fetchone()
@@ -79,9 +78,107 @@ def upsert_user_from_google(identity: GoogleIdentity) -> User:
             )
 
         cursor.execute(
-            "SELECT id, google_sub, email, name, picture_url "
-            "FROM users WHERE google_sub = %s",
+            f"SELECT {_USER_COLUMNS} FROM users WHERE google_sub = %s",
             (identity.sub,),
+        )
+        refreshed = cursor.fetchone()
+
+    assert refreshed is not None, "user row disappeared mid-upsert"
+    return _row_to_user(refreshed)
+
+
+class AppleIdentityWithoutLinkError(Exception):
+    """Raised when an Apple sign-in arrives with no email *and* no
+    pre-existing user row matching the Apple `sub`.
+
+    In practice this should never happen — Apple always provides
+    `email` on the *first* authorization for a given app+user pair,
+    so by the time we'd see a token without email we should already
+    have a user row keyed off the same `sub`. If we ever do hit
+    this path the user can recover by going to Settings → Apple ID
+    → Sign In with Apple → time2leave → "Stop Using Apple ID",
+    which forces Apple to re-issue the email next sign-in.
+    """
+
+
+def upsert_user_from_apple(
+    identity: AppleIdentity,
+    *,
+    name: str | None = None,
+) -> User:
+    """Insert (or refresh) the user row tied to a verified Apple identity.
+
+    Resolution order, highest priority first:
+      1. Existing row with the same `apple_sub`. This is the
+         steady-state path — we set `last_login_at` (via the timestamp
+         column's ON UPDATE), refresh the email if Apple supplied one
+         this time, and persist the name if the client sent it (which
+         only happens on the first sign-in).
+      2. Existing row with the same email (cross-provider link). Lets
+         a user who first signed in with Google adopt Apple Sign In
+         later without becoming a duplicate row. We attach `apple_sub`
+         to that row.
+      3. New row with `apple_sub` + email. Requires email — see
+         `AppleIdentityWithoutLinkError`.
+
+    `name` is sourced from the iOS client's
+    `AppleAuthentication.signInAsync` response (only populated on
+    first sign-in by Apple's privacy design); it isn't carried in
+    the identity token itself, which is why it's a separate kwarg
+    instead of a field on `AppleIdentity`.
+    """
+    apple_sub = identity.sub
+    email = identity.email  # may be None after first sign-in
+
+    with Database() as cursor:
+        # Try the apple_sub match first (steady state).
+        cursor.execute(
+            "SELECT id FROM users WHERE apple_sub = %s LIMIT 1",
+            (apple_sub,),
+        )
+        row = cursor.fetchone()
+
+        if row is None and email is not None:
+            # Cross-provider link by email.
+            cursor.execute(
+                "SELECT id FROM users WHERE email = %s LIMIT 1",
+                (email,),
+            )
+            row = cursor.fetchone()
+
+        if row is None:
+            if email is None:
+                raise AppleIdentityWithoutLinkError(
+                    "Apple identity has no email and no "
+                    "matching apple_sub on file"
+                )
+            cursor.execute(
+                """
+                INSERT INTO users (apple_sub, email, name)
+                VALUES (%s, %s, %s)
+                """,
+                (apple_sub, email, name),
+            )
+        else:
+            # Refresh the row. Email only updates when Apple actually
+            # sends one this round; otherwise we keep what's stored.
+            # `name` is COALESCE'd so a re-login (which never carries
+            # a name) doesn't blow away the name we captured on the
+            # first sign-in.
+            cursor.execute(
+                """
+                UPDATE users
+                SET apple_sub = %s,
+                    email     = COALESCE(%s, email),
+                    name      = COALESCE(%s, name)
+                WHERE id = %s
+                """,
+                (apple_sub, email, name, row[0]),
+            )
+
+        cursor.execute(
+            f"SELECT {_USER_COLUMNS} FROM users WHERE apple_sub = %s",
+            (apple_sub,),
         )
         refreshed = cursor.fetchone()
 
@@ -93,7 +190,8 @@ def _row_to_user(row: tuple) -> User:
     return User(
         id=int(row[0]),
         google_sub=row[1],
-        email=row[2],
-        name=row[3],
-        picture_url=row[4],
+        apple_sub=row[2],
+        email=row[3],
+        name=row[4],
+        picture_url=row[5],
     )

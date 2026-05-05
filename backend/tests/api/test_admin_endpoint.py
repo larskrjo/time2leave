@@ -20,6 +20,7 @@ def admin_override() -> User:
     return User(
         id=1,
         google_sub="s",
+        apple_sub=None,
         email="admin@example.com",
         name="Admin",
         picture_url=None,

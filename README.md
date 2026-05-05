@@ -39,10 +39,32 @@ types, the API client, time/slot helpers, and heatmap math.
 
 ## Quickstart
 
+The fastest path on a fresh checkout is the interactive bootstrap
+script — it walks you through prereq checks, installing deps,
+creating `backend/.env`, configuring the mobile app's env via GCP
+Secret Manager, and bringing up the dev stack. Every step prompts
+before touching anything and is safe to re-run any time:
+
+```bash
+./setup.sh
+```
+
+If you'd rather drive Make targets directly:
+
 ```bash
 make install      # set up backend venv + JS workspace node_modules
 make dev-be       # mysql + api in docker (schema + dev user seeded automatically)
 make dev-fe       # web app on http://localhost:5173 (apps/web)
+```
+
+For the mobile app, the canonical runtime is a **development build**
+(not Expo Go — see `apps/mobile/README.md` for why). First build
+takes ~5–10 minutes; afterwards Metro hot-reloads JS instantly:
+
+```bash
+npm run env:pull:mobile -- local       # hydrate apps/mobile/.env from GCP
+npm run build:ios:mobile               # one-time: build + install on iPhone simulator
+npm run dev:mobile                     # day-to-day: Metro only
 ```
 
 Open http://localhost:5173, click **"Continue as dev user"** (the

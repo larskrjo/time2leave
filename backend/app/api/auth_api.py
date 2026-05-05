@@ -16,6 +16,10 @@ import logging
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response, status
 from pydantic import BaseModel, EmailStr, Field
 
+from app.auth.apple import (
+    InvalidAppleIdentityTokenError,
+    verify_apple_identity_token,
+)
 from app.auth.dependencies import get_current_user, get_optional_user, is_admin
 from app.auth.google import InvalidGoogleIdTokenError, verify_google_id_token
 from app.auth.sessions import (
@@ -26,8 +30,10 @@ from app.auth.sessions import (
 from app.config import Settings, get_settings
 from app.services.allowlist import is_email_allowed
 from app.services.users import (
+    AppleIdentityWithoutLinkError,
     User,
     get_user_by_email,
+    upsert_user_from_apple,
     upsert_user_from_google,
 )
 
@@ -38,6 +44,20 @@ auth_router = APIRouter(prefix="/api/v1", tags=["Auth"])
 
 class GoogleLoginRequest(BaseModel):
     credential: str = Field(..., description="Google ID token from GSI")
+
+
+class AppleLoginRequest(BaseModel):
+    """Body posted by the iOS client after `expo-apple-authentication`
+    completes. `identity_token` is the JWT signed by Apple; `name` is
+    populated *only* on the first authorization for a given user (per
+    Apple's privacy design). The backend never trusts `name` for
+    identity decisions — it's stored as the user's display name on
+    first sign-up and otherwise ignored."""
+
+    identity_token: str = Field(
+        ..., description="JWT identity token from AuthenticationServices"
+    )
+    name: str | None = None
 
 
 class DevLoginRequest(BaseModel):
@@ -147,6 +167,78 @@ async def login_with_google(
     )
 
 
+@auth_router.post("/auth/apple")
+async def login_with_apple(
+    body: AppleLoginRequest,
+    request: Request,
+    response: Response,
+    settings: Settings = Depends(get_settings),
+    x_client: str | None = Header(default=None),
+) -> AuthedUserResponse:
+    """Exchange a Sign-in-with-Apple identity token for a session.
+
+    Mirrors `/auth/google`: verify the JWT, enforce the allowlist on
+    the user's email, upsert the user row, and issue a session
+    token (cookie for web, bearer for `X-Client: mobile`).
+
+    Apple-specific behaviour:
+      - Email is only delivered on the *first* authorization for a
+        given user. On subsequent sign-ins the token has no email
+        claim; we identify the user by `apple_sub` instead. If the
+        first ever sign-in arrives without an email *and* we have
+        no row keyed on the same `sub`, we 400 with a clear error
+        instead of silently creating an unidentifiable account.
+      - The allowlist is checked only when an email is present.
+        Once a user is on the allowlist for their first sign-in,
+        subsequent token-only sign-ins (no email) are accepted on
+        the basis of the existing row.
+    """
+    try:
+        identity = verify_apple_identity_token(body.identity_token, settings)
+    except InvalidAppleIdentityTokenError as exc:
+        logger.info("Apple login rejected: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid Apple credential",
+        ) from exc
+
+    if identity.email is not None:
+        if not identity.email_verified:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Apple account email is not verified",
+            )
+        if not is_email_allowed(identity.email, settings=settings):
+            logger.info("Login blocked by allowlist: %s", identity.email)
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=(
+                    "This email is not on the allowlist. Ask the owner to add "
+                    "you and try again."
+                ),
+            )
+
+    try:
+        user = upsert_user_from_apple(identity, name=body.name)
+    except AppleIdentityWithoutLinkError as exc:
+        logger.warning("Apple sign-in without identifiable user: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "Could not identify your Apple account. Please go to "
+                "iOS Settings → Apple ID → Sign In with Apple → "
+                "time2leave → Stop Using Apple ID, then try again."
+            ),
+        ) from exc
+
+    return _attach_session(
+        user=user,
+        settings=settings,
+        response=response,
+        include_token_in_body=_wants_session_token(request, x_client),
+    )
+
+
 @auth_router.post("/auth/dev-login")
 async def dev_login(
     body: DevLoginRequest,
@@ -225,6 +317,7 @@ async def auth_config(
     """Client-safe OAuth config so the SPA doesn't need a separate env var flow."""
     return {
         "google_oauth_client_id": settings.google_oauth_client_id,
+        "apple_sign_in_enabled": bool(settings.apple_oauth_client_id),
         "dev_login_enabled": settings.enable_dev_login
         and settings.app_env != "prod",
     }

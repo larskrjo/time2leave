@@ -50,6 +50,26 @@ dev-fe:
 dev-full:
 	$(COMPOSE_DEV) --profile full up -d --build
 
+## dev-ios: Full native build + install on a connected iPhone.
+##          Regenerates ios/ from app.config.ts, installs pods, then
+##          builds and installs the app on the device. Always-correct
+##          (works for JS, native plugin, and entitlement changes
+##          alike) at the cost of being slower than `dev-ios-start`.
+##          Override the target device with IOS_DEVICE='My Other iPhone'.
+.PHONY: dev-ios
+dev-ios:
+	cd apps/mobile && npx expo prebuild --platform ios
+	cd apps/mobile/ios && pod install
+	cd apps/mobile && npx expo run:ios --device "$${IOS_DEVICE:-Lars Kristians iPhone}"
+
+## dev-ios-start: Start the Expo dev server for the mobile app.
+##                The dev build already on your phone connects to it
+##                over Wi-Fi; save a JS file and the app fast-refreshes.
+##                No rebuild required — use this for everyday JS work.
+.PHONY: dev-ios-start
+dev-ios-start:
+	cd apps/mobile && npx expo start --dev-client
+
 ## seed: Refresh next-week samples for every active trip via the running backend.
 ##       Requires you've signed in once at http://localhost:5173 as an admin.
 .PHONY: seed

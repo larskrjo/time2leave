@@ -12,6 +12,7 @@
 export type ApiPaths = {
     readonly me: string;
     readonly authGoogle: string;
+    readonly authApple: string;
     readonly authLogout: string;
     readonly authDevLogin: string;
     readonly authConfig: string;
@@ -28,6 +29,7 @@ export function createApiPaths(baseUrl: string): ApiPaths {
     return {
         me: `${baseUrl}/api/v1/me`,
         authGoogle: `${baseUrl}/api/v1/auth/google`,
+        authApple: `${baseUrl}/api/v1/auth/apple`,
         authLogout: `${baseUrl}/api/v1/auth/logout`,
         authDevLogin: `${baseUrl}/api/v1/auth/dev-login`,
         authConfig: `${baseUrl}/api/v1/auth/config`,

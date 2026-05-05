@@ -1,34 +1,24 @@
 /**
- * Phone heatmap: 7 rows (Mon–Sun) × 60 columns (15-min slots from
- * 06:00–20:45) of color-mapped tiles, plus a "best slot per day" chip
- * strip and a NOW indicator.
+ * Phone heatmap rendered as a list of seven per-day accordions instead
+ * of one tiny 7×60 grid. Mirrors the web's `MobileAccordionHeatmap`
+ * (see `apps/web/app/components/TripHeatmap.tsx`) so the experience is
+ * consistent with what users get when they shrink the web app.
  *
- * Why `<View>` tiles instead of SVG / @nivo/heatmap?
- *   - 420 cells render in one frame on every modern phone.
- *   - We avoid pulling in `react-native-svg` + a charting lib for one
- *     trivial layout.
- *   - Touch targets are real rows/cells, so the OS handles haptics
- *     and accessibility for free.
+ * Why a per-day list?
+ *   - 60 cells across a phone width is a ~5 px column — unreadable
+ *     and untappable.
+ *   - Glanceable: the collapsed row tells you the day's fastest slot
+ *     and how many minutes; that's the most-asked-for answer.
+ *   - One day at a time fits a typical commute mental model — "what's
+ *     the best time *today*?".
  *
  * Color mapping, "best slot per day" reduction, and the LA-time NOW
- * bucket all come from `@time2leave/shared` so this screen is a
- * pixel-faithful sibling of the web heatmap.
+ * bucket all come from `@time2leave/shared` so colors and best slots
+ * match the web heatmap byte-for-byte.
  */
 import { useEffect, useMemo, useState } from "react";
-import {
-    Pressable,
-    StyleSheet,
-    View,
-    type LayoutChangeEvent,
-} from "react-native";
+import { Pressable, StyleSheet, View } from "react-native";
 import { Surface, Text, useTheme } from "react-native-paper";
-import Animated, {
-    useAnimatedStyle,
-    useSharedValue,
-    withRepeat,
-    withSequence,
-    withTiming,
-} from "react-native-reanimated";
 
 import {
     bestSlotPerDay,
@@ -44,27 +34,17 @@ import {
     type Weekday,
 } from "@time2leave/shared";
 
-const HOUR_LABELS = ["6a", "9a", "12p", "3p", "6p", "9p"];
-const ROW_LABEL_WIDTH = 36;
-const HOUR_LABEL_HEIGHT = 18;
-const CELL_HEIGHT = 14;
-const CELL_GAP = 1;
+import { Symbol } from "~/components/native/Symbol";
 
 type Props = {
     heatmap: HeatmapPayload;
     direction: Direction;
-    /** Show the pulsing "you are here" cell. Off for the splash demo. */
+    /** Show the "NOW" badge on today's current cell. Off for splash. */
     showNow?: boolean;
 };
 
 export function TripHeatmap({ heatmap, direction, showNow = true }: Props) {
     const theme = useTheme();
-    const [width, setWidth] = useState(0);
-    const [selected, setSelected] = useState<{
-        day: Weekday;
-        slot: string;
-    } | null>(null);
-
     const slots = useMemo(() => weekTimeSlots(), []);
     const weekdays = (heatmap.weekdays ?? WEEKDAYS) as readonly Weekday[];
     const directionPayload = heatmap[direction] ?? {};
@@ -85,246 +65,355 @@ export function TripHeatmap({ heatmap, direction, showNow = true }: Props) {
         return () => clearInterval(id);
     }, [showNow]);
 
-    const onLayout = (e: LayoutChangeEvent) => setWidth(e.nativeEvent.layout.width);
-    const cellWidth = useMemo(() => {
-        if (width <= 0) return 0;
-        // 60 cells + 59 gaps + a row label gutter on the left.
-        const usable = width - ROW_LABEL_WIDTH - CELL_GAP * (slots.length - 1);
-        return Math.max(2, usable / slots.length);
-    }, [width, slots.length]);
-
     const bests = useMemo(
         () => bestSlotPerDay(heatmap, direction),
         [heatmap, direction],
     );
+    const fastestByDay = useMemo(() => {
+        const map = new Map<Weekday, { slot: string; minutes: number }>();
+        for (const b of bests) map.set(b.day, { slot: b.slot, minutes: b.minutes });
+        return map;
+    }, [bests]);
 
-    return (
-        <Surface
-            mode="flat"
-            style={{
-                padding: 12,
-                borderRadius: 12,
-                gap: 12,
-                backgroundColor: theme.colors.surface,
-            }}
-        >
-            {/* Best-slot-per-day chip strip. On phones this is the most
-                important glanceable summary of the week. */}
-            <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6 }}>
-                {bests.length === 0 ? (
-                    <Text
-                        variant="bodySmall"
-                        style={{ color: theme.colors.onSurfaceVariant }}
-                    >
-                        Fastest slots will appear here once samples start
-                        coming in.
-                    </Text>
-                ) : (
-                    bests.map((b) => (
-                        <BestChip
-                            key={b.day}
-                            day={b.day}
-                            slot={b.slot}
-                            minutes={b.minutes}
-                            onPress={() =>
-                                setSelected({ day: b.day, slot: b.slot })
-                            }
-                        />
-                    ))
-                )}
-            </View>
+    // Default-expand today, otherwise the first day with samples,
+    // otherwise the first weekday. Keeps the screen useful before
+    // the user touches anything.
+    const defaultDay = useMemo(() => {
+        if (now && weekdays.includes(now.day)) return now.day;
+        const firstWithData = weekdays.find((d) => fastestByDay.has(d));
+        return firstWithData ?? weekdays[0] ?? ("Mon" as Weekday);
+    }, [now, weekdays, fastestByDay]);
+    const [expanded, setExpanded] = useState<Weekday | null>(defaultDay);
 
-            {/* Hour-axis labels above the grid. Six labels evenly spaced
-                across the 06:00–21:00 range. */}
-            <View
+    if (bests.length === 0) {
+        return (
+            <Surface
+                mode="flat"
+                elevation={0}
                 style={{
-                    flexDirection: "row",
-                    paddingLeft: ROW_LABEL_WIDTH,
-                    height: HOUR_LABEL_HEIGHT,
+                    padding: 16,
+                    borderRadius: 12,
+                    backgroundColor: tintBg(theme.colors.primary, 0.04),
                 }}
             >
-                {HOUR_LABELS.map((label) => (
-                    <Text
-                        key={label}
-                        variant="labelSmall"
-                        style={{
-                            flex: 1,
-                            color: theme.colors.onSurfaceVariant,
-                        }}
-                    >
-                        {label}
-                    </Text>
-                ))}
-            </View>
-
-            <View onLayout={onLayout} style={{ gap: CELL_GAP }}>
-                {weekdays.map((day) => {
-                    const row = directionPayload[day] ?? {};
-                    return (
-                        <View
-                            key={day}
-                            style={{
-                                flexDirection: "row",
-                                gap: CELL_GAP,
-                                alignItems: "center",
-                            }}
-                        >
-                            <Text
-                                variant="labelSmall"
-                                style={{
-                                    width: ROW_LABEL_WIDTH,
-                                    color:
-                                        now?.day === day
-                                            ? theme.colors.primary
-                                            : theme.colors.onSurfaceVariant,
-                                    fontWeight: now?.day === day ? "700" : "500",
-                                }}
-                            >
-                                {day}
-                            </Text>
-                            {slots.map((slot) => {
-                                const v = row[slot];
-                                const sampled = typeof v === "number";
-                                const bg = sampled
-                                    ? colorFor(v, minMinutes, maxMinutes)
-                                    : theme.colors.surfaceVariant;
-                                const isNow =
-                                    now?.day === day && now?.slot === slot;
-                                const isSelected =
-                                    selected?.day === day &&
-                                    selected?.slot === slot;
-                                return (
-                                    <Pressable
-                                        key={slot}
-                                        onPress={() =>
-                                            setSelected({ day, slot })
-                                        }
-                                        style={{
-                                            width: cellWidth,
-                                            height: CELL_HEIGHT,
-                                            backgroundColor: bg,
-                                            borderRadius: 1,
-                                            opacity: sampled ? 1 : 0.5,
-                                            borderWidth: isSelected ? 1 : 0,
-                                            borderColor: theme.colors.primary,
-                                        }}
-                                    >
-                                        {isNow ? <NowDot /> : null}
-                                    </Pressable>
-                                );
-                            })}
-                        </View>
-                    );
-                })}
-            </View>
-
-            {/* Selected cell read-out. Tapping a cell pins it; a second
-                tap on the same cell or any other cell updates it. */}
-            <Text
-                variant="bodySmall"
-                style={{ color: theme.colors.onSurfaceVariant }}
-            >
-                {selected
-                    ? formatSelected(selected, directionPayload, direction)
-                    : "Tap a cell to see the exact drive time."}
-            </Text>
-        </Surface>
-    );
-}
-
-function formatSelected(
-    sel: { day: Weekday; slot: string },
-    directionPayload: HeatmapPayload["outbound"],
-    direction: Direction,
-): string {
-    const v = directionPayload[sel.day]?.[sel.slot];
-    const label = formatSlot12h(sel.slot);
-    if (typeof v === "number") {
-        return `${sel.day} · ${label} · ${direction} · ${minutesLabel(v)}`;
-    }
-    return `${sel.day} · ${label} · ${direction} · not sampled yet`;
-}
-
-function NowDot() {
-    const scale = useSharedValue(1);
-    useEffect(() => {
-        scale.value = withRepeat(
-            withSequence(
-                withTiming(1.4, { duration: 700 }),
-                withTiming(1, { duration: 700 }),
-            ),
-            -1,
-            false,
+                <Text
+                    variant="bodyMedium"
+                    style={{ color: theme.colors.onSurfaceVariant }}
+                >
+                    Fastest slots will appear here as samples come in.
+                </Text>
+            </Surface>
         );
-    }, [scale]);
-    const animatedStyle = useAnimatedStyle(() => ({
-        transform: [{ scale: scale.value }],
-    }));
+    }
+
     return (
-        <View style={StyleSheet.absoluteFillObject} pointerEvents="none">
-            <View
-                style={{
-                    flex: 1,
-                    alignItems: "center",
-                    justifyContent: "center",
-                }}
-            >
-                <Animated.View
-                    style={[
-                        {
-                            width: 6,
-                            height: 6,
-                            borderRadius: 3,
-                            backgroundColor: "#1e40af",
-                        },
-                        animatedStyle,
-                    ]}
+        <View style={{ gap: 8 }}>
+            {weekdays.map((day) => (
+                <DayAccordion
+                    key={day}
+                    day={day}
+                    isToday={now?.day === day}
+                    isExpanded={expanded === day}
+                    onToggle={() => setExpanded(expanded === day ? null : day)}
+                    fastest={fastestByDay.get(day) ?? null}
+                    row={directionPayload[day] ?? {}}
+                    slots={slots}
+                    minMinutes={minMinutes}
+                    maxMinutes={maxMinutes}
+                    nowSlot={now?.day === day ? now.slot : null}
                 />
-            </View>
+            ))}
         </View>
     );
 }
 
-function BestChip({
+function DayAccordion({
     day,
-    slot,
-    minutes,
-    onPress,
+    isToday,
+    isExpanded,
+    onToggle,
+    fastest,
+    row,
+    slots,
+    minMinutes,
+    maxMinutes,
+    nowSlot,
 }: {
     day: Weekday;
-    slot: string;
-    minutes: number;
-    onPress: () => void;
+    isToday: boolean;
+    isExpanded: boolean;
+    onToggle: () => void;
+    fastest: { slot: string; minutes: number } | null;
+    row: Record<string, number | null>;
+    slots: readonly string[];
+    minMinutes: number;
+    maxMinutes: number;
+    nowSlot: string | null;
 }) {
     const theme = useTheme();
+
+    const borderColor = theme.dark
+        ? "rgba(255,255,255,0.08)"
+        : "rgba(0,0,0,0.06)";
+
     return (
-        <Pressable
-            onPress={onPress}
+        <Surface
+            mode="flat"
+            elevation={0}
             style={{
-                paddingHorizontal: 10,
-                paddingVertical: 6,
-                borderRadius: 8,
-                borderWidth: 1,
-                borderColor: theme.colors.outline,
-                gap: 2,
-                minWidth: 96,
+                borderRadius: 12,
+                borderWidth: StyleSheet.hairlineWidth,
+                borderColor,
+                backgroundColor: theme.colors.surface,
+                overflow: "hidden",
             }}
         >
-            <Text
-                variant="labelSmall"
-                style={{ color: theme.colors.onSurfaceVariant }}
+            <Pressable
+                onPress={onToggle}
+                android_ripple={{ color: theme.colors.surfaceVariant }}
+                accessibilityRole="button"
+                accessibilityState={{ expanded: isExpanded }}
+                accessibilityLabel={`${day}${isToday ? ", today" : ""}${
+                    fastest
+                        ? `, fastest ${formatSlot12h(fastest.slot)} ${minutesLabel(fastest.minutes)}`
+                        : ""
+                }`}
+                style={({ pressed }) => ({ opacity: pressed ? 0.6 : 1 })}
             >
-                {day} · best
-            </Text>
-            <Text variant="bodyMedium" style={{ fontWeight: "700" }}>
-                {formatSlot12h(slot)}
-            </Text>
-            <Text variant="labelSmall" style={{ color: "#15803d" }}>
-                {minutesLabel(minutes)}
-            </Text>
-        </Pressable>
+                <View
+                    style={{
+                        flexDirection: "row",
+                        alignItems: "center",
+                        gap: 8,
+                        paddingVertical: 12,
+                        paddingHorizontal: 14,
+                    }}
+                >
+                    <Text
+                        variant="titleMedium"
+                        style={{
+                            minWidth: 44,
+                            color: theme.colors.onSurface,
+                            fontWeight: "700",
+                            letterSpacing: -0.2,
+                        }}
+                    >
+                        {day}
+                    </Text>
+                    {isToday ? <TodayPill /> : null}
+                    {fastest ? (
+                        <Text
+                            variant="bodySmall"
+                            style={{
+                                marginLeft: "auto",
+                                color: theme.colors.onSurfaceVariant,
+                            }}
+                            numberOfLines={1}
+                        >
+                            Fastest {formatSlot12h(fastest.slot)} ·{" "}
+                            <Text
+                                style={{
+                                    color: theme.dark
+                                        ? "#34c759"
+                                        : "#15803d",
+                                    fontWeight: "700",
+                                }}
+                            >
+                                {minutesLabel(fastest.minutes)}
+                            </Text>
+                        </Text>
+                    ) : (
+                        <Text
+                            variant="bodySmall"
+                            style={{
+                                marginLeft: "auto",
+                                color: theme.colors.onSurfaceVariant,
+                            }}
+                        >
+                            No samples yet
+                        </Text>
+                    )}
+                    <View style={{ marginLeft: 4, padding: 4 }}>
+                        <Symbol
+                            name={
+                                isExpanded
+                                    ? {
+                                          ios: "chevron.up",
+                                          android: "chevron-up",
+                                      }
+                                    : {
+                                          ios: "chevron.down",
+                                          android: "chevron-down",
+                                      }
+                            }
+                            size={14}
+                            color={theme.colors.onSurfaceVariant}
+                            weight="semibold"
+                        />
+                    </View>
+                </View>
+            </Pressable>
+
+            {isExpanded ? (
+                <CellGrid
+                    row={row}
+                    slots={slots}
+                    minMinutes={minMinutes}
+                    maxMinutes={maxMinutes}
+                    nowSlot={nowSlot}
+                />
+            ) : null}
+        </Surface>
     );
 }
 
-/** Re-export so the detail screen can render a hour-axis legend. */
-export const HOUR_AXIS_LABELS = HOUR_LABELS;
+/**
+ * iOS-style "Today" badge — quiet tinted pill, not a Material chip.
+ * Uses the brand primary as the tint so it picks up the user's
+ * theme without any extra wiring.
+ */
+function TodayPill() {
+    const theme = useTheme();
+    return (
+        <View
+            style={{
+                paddingHorizontal: 8,
+                paddingVertical: 2,
+                borderRadius: 999,
+                backgroundColor: tintBg(theme.colors.primary, 0.18),
+            }}
+        >
+            <Text
+                style={{
+                    fontSize: 11,
+                    fontWeight: "700",
+                    color: theme.colors.primary,
+                    letterSpacing: 0.4,
+                    textTransform: "uppercase",
+                }}
+            >
+                Today
+            </Text>
+        </View>
+    );
+}
+
+const CELL_MIN_WIDTH = 76;
+const CELL_GAP = 6;
+
+function CellGrid({
+    row,
+    slots,
+    minMinutes,
+    maxMinutes,
+    nowSlot,
+}: {
+    row: Record<string, number | null>;
+    slots: readonly string[];
+    minMinutes: number;
+    maxMinutes: number;
+    nowSlot: string | null;
+}) {
+    const theme = useTheme();
+    // Use the brand primary for the "NOW" badge so it picks up the
+    // user's theme automatically — previously hardcoded to a deep
+    // blue that no longer matches the lavender brand colour.
+    const nowAccent = theme.colors.primary;
+    return (
+        <View
+            style={{
+                paddingHorizontal: 12,
+                paddingBottom: 12,
+                flexDirection: "row",
+                flexWrap: "wrap",
+                gap: CELL_GAP,
+            }}
+        >
+            {slots.map((slot) => {
+                const v = row[slot];
+                const hasData = typeof v === "number";
+                const isNow = nowSlot === slot;
+                const bg = hasData
+                    ? colorFor(v, minMinutes, maxMinutes)
+                    : tintBg(theme.colors.onSurface, 0.06);
+                return (
+                    <View
+                        key={slot}
+                        style={{
+                            minWidth: CELL_MIN_WIDTH,
+                            flexGrow: 1,
+                            flexBasis: CELL_MIN_WIDTH,
+                            paddingVertical: 8,
+                            paddingHorizontal: 6,
+                            borderRadius: 8,
+                            alignItems: "center",
+                            backgroundColor: bg,
+                            borderWidth: isNow ? 2 : 0,
+                            borderColor: isNow ? nowAccent : "transparent",
+                            position: "relative",
+                        }}
+                    >
+                        <Text
+                            style={{
+                                fontSize: 12,
+                                fontWeight: "700",
+                                fontVariant: ["tabular-nums"],
+                                color: hasData
+                                    ? "#0b1020"
+                                    : theme.colors.onSurfaceVariant,
+                            }}
+                        >
+                            {formatSlot12h(slot)}
+                        </Text>
+                        <Text
+                            style={{
+                                fontSize: 11,
+                                color: hasData
+                                    ? "rgba(11, 16, 32, 0.78)"
+                                    : theme.colors.onSurfaceVariant,
+                                fontWeight: hasData ? "600" : "400",
+                            }}
+                        >
+                            {hasData ? minutesLabel(v) : "…"}
+                        </Text>
+                        {isNow ? (
+                            <View
+                                style={{
+                                    position: "absolute",
+                                    top: -6,
+                                    left: 6,
+                                    paddingHorizontal: 5,
+                                    paddingVertical: 1,
+                                    borderRadius: 4,
+                                    backgroundColor: nowAccent,
+                                }}
+                                pointerEvents="none"
+                            >
+                                <Text
+                                    style={{
+                                        fontSize: 9,
+                                        fontWeight: "800",
+                                        color: "#fff",
+                                        letterSpacing: 0.4,
+                                    }}
+                                >
+                                    NOW
+                                </Text>
+                            </View>
+                        ) : null}
+                    </View>
+                );
+            })}
+        </View>
+    );
+}
+
+function tintBg(hex: string, alpha: number): string {
+    const m = hex.match(/^#([0-9a-f]{6})$/i);
+    if (!m) return hex;
+    const n = parseInt(m[1]!, 16);
+    const r = (n >> 16) & 0xff;
+    const g = (n >> 8) & 0xff;
+    const b = n & 0xff;
+    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
