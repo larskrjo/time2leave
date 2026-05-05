@@ -15,8 +15,11 @@
  *
  *   npm --prefix apps/mobile run icons
  *
- * The script relies on `sharp` (devDependency) which embeds resvg for
- * SVG rasterisation, so output is deterministic and doesn't depend on
+ * The script relies on `sharp` (declared as `optionalDependencies` so
+ * the EAS macOS cloud builder can skip it when its prebuilt binary
+ * doesn't resolve — sharp has no runtime role in the bundle, only
+ * in this dev-time script). Sharp embeds resvg for SVG
+ * rasterisation, so output is deterministic and doesn't depend on
  * any system-installed font for vector shapes — the only place a
  * system font is consulted is when rendering the "2" glyph, and we
  * pin it to a portable system-ui stack so resvg falls back to whatever
